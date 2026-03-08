@@ -1,19 +1,6 @@
 defmodule OpenGQL.Parser do
   @moduledoc """
-  NimbleParsec-based parser for the GQL MATCH pattern subset.
-
-  Supports parsing:
-  - Node patterns: `(variable:Label {props})`
-  - Edge patterns: `-[:TYPE]->`, `<-[:TYPE]-`
-  - Path patterns: `(a:Label)-[:TYPE]->(b:Label)`
-  - MATCH clause with multiple comma-separated patterns
-  - RETURN clause
-
-  ## Examples
-
-      iex> OpenGQL.Parser.parse("MATCH (a:Person) RETURN a")
-      {:ok, [{:statement, [match: [path: [node: [var: ["a"], labels: ["Person"]]]], return: ["a"]]}], "", %{}, {1, 0}, 25}
-
+  NimbleParsec-based parser for the GQL pattern subset.
   """
 
   import NimbleParsec
@@ -132,7 +119,6 @@ defmodule OpenGQL.Parser do
     |> concat(optional_ws)
     |> optional(properties)
 
-  # `-[...]->`
   right_edge =
     ignore(string("-["))
     |> concat(optional_ws)
@@ -141,7 +127,6 @@ defmodule OpenGQL.Parser do
     |> ignore(string("]->"))
     |> tag(:edge_right)
 
-  # `<-[...]-`
   left_edge =
     ignore(string("<-["))
     |> concat(optional_ws)
@@ -150,7 +135,6 @@ defmodule OpenGQL.Parser do
     |> ignore(string("]-"))
     |> tag(:edge_left)
 
-  # `-[...]-` (undirected)
   undirected_edge =
     ignore(string("-["))
     |> concat(optional_ws)
@@ -182,6 +166,69 @@ defmodule OpenGQL.Parser do
     )
     |> tag(:match)
 
+  # ── CREATE Clause ──────────────────────────────────────────────────────────────
+
+  create_clause =
+    ignore(string("CREATE"))
+    |> ignore(concat(whitespace, optional_ws))
+    |> concat(path_pattern)
+    |> repeat(
+      ignore(concat(optional_ws, string(",")))
+      |> concat(optional_ws)
+      |> concat(path_pattern)
+    )
+    |> tag(:create)
+
+  # ── SET Clause ─────────────────────────────────────────────────────────────────
+
+  set_assignment =
+    concat(optional_ws, identifier)
+    |> ignore(string("."))
+    |> concat(identifier)
+    |> ignore(concat(optional_ws, string("=")))
+    |> concat(optional_ws)
+    |> concat(value)
+    |> tag(:assignment)
+
+  set_clause =
+    ignore(string("SET"))
+    |> ignore(whitespace)
+    |> concat(optional_ws)
+    |> concat(set_assignment)
+    |> repeat(
+      ignore(concat(optional_ws, string(",")))
+      |> concat(optional_ws)
+      |> concat(set_assignment)
+    )
+    |> tag(:set)
+
+  # ── DELETE Clause ──────────────────────────────────────────────────────────────
+
+  delete_vars =
+    identifier
+    |> repeat(
+      ignore(concat(optional_ws, string(",")))
+      |> concat(optional_ws)
+      |> concat(identifier)
+    )
+    |> tag(:vars)
+
+  delete_clause =
+    choice([
+      ignore(string("DETACH"))
+      |> ignore(whitespace)
+      |> ignore(string("DELETE"))
+      |> ignore(whitespace)
+      |> concat(optional_ws)
+      |> concat(delete_vars)
+      |> tag(:detach_delete),
+      ignore(string("DELETE"))
+      |> ignore(whitespace)
+      |> concat(optional_ws)
+      |> concat(delete_vars)
+      |> tag(:delete)
+    ])
+
   # ── RETURN Clause ──────────────────────────────────────────────────────────────
 
   return_item = choice([string("*"), identifier])
@@ -200,17 +247,28 @@ defmodule OpenGQL.Parser do
 
   # ── Full Statement ─────────────────────────────────────────────────────────────
 
+  clause =
+    choice([
+      match_clause,
+      create_clause,
+      set_clause,
+      delete_clause,
+      return_clause
+    ])
+
   statement =
-    concat(optional_ws, match_clause)
-    |> ignore(whitespace)
-    |> concat(return_clause)
+    optional_ws
+    |> concat(clause)
+    |> repeat(
+      ignore(whitespace)
+      |> concat(optional_ws)
+      |> concat(clause)
+    )
     |> optional(ignore(concat(optional_ws, string(";"))))
     |> concat(optional_ws)
     |> tag(:statement)
 
   defparsec(:parse, statement)
-
-  # ── Helpers ────────────────────────────────────────────────────────────────────
 
   defp reduce_integer([sign, digits]) when is_integer(sign) do
     String.to_integer(<<sign>> <> digits)

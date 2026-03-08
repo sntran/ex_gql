@@ -1,6 +1,12 @@
 %{
+  "cc_precompiler": {:git, "https://github.com/cocoa-xu/cc_precompiler.git", "6c02cc1a59ba7e98570c5cbf08d4c7c47a083927", [tag: "v0.1.9"]},
+  "db_connection": {:git, "https://github.com/elixir-ecto/db_connection.git", "a5e19282c7fbda4754c40f271ada352dd9675762", [tag: "v2.7.0"]},
   "decimal": {:git, "https://github.com/ericmj/decimal.git", "592d59ac4474933f91cdc3e8e037f137f7e008b0", [tag: "v2.3.0"]},
   "ecto": {:git, "https://github.com/elixir-ecto/ecto.git", "18288287f18ce205b03b3b3dc8cb80f0f1b06dbe", [tag: "v3.12.5"]},
+  "ecto_sql": {:git, "https://github.com/elixir-ecto/ecto_sql.git", "df6732a7f5fcd50aa2ddc6a09b2526038c763105", [tag: "v3.12.1"]},
+  "ecto_sqlite3": {:git, "https://github.com/elixir-sqlite/ecto_sqlite3.git", "ebfab792bfd8e07b0dec0a65ade8b7ee3c67bfa4", [tag: "v0.17.5"]},
+  "elixir_make": {:git, "https://github.com/elixir-lang/elixir_make.git", "12f5bcd40a7b87d00d67185d5af3b6f0496abd54", [tag: "v0.9.0"]},
+  "exqlite": {:git, "https://github.com/elixir-sqlite/exqlite.git", "ca2938f4a0a24602d09ae3d82a03a18cd5241b22", [tag: "v0.29.0"]},
   "nimble_parsec": {:git, "https://github.com/dashbitco/nimble_parsec.git", "0b195519d6a501ed51d84da35183a010493b85c1", [tag: "v1.4.0"]},
   "stream_data": {:git, "https://github.com/whatyouhide/stream_data.git", "028e21fd2cd6935da9cc541c51848b8be45409ba", [tag: "v1.1.2"]},
   "telemetry": {:git, "https://github.com/beam-telemetry/telemetry.git", "8d8af76720856bcf26641ee1307658ad8f25e466", [tag: "v1.3.0"]},

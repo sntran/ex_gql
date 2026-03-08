@@ -15,7 +15,7 @@ defmodule OpenGQLTest do
     test "single node with label" do
       query = ~G"MATCH (a:Person) RETURN a"
       assert %Ecto.Query{} = query
-      assert inspect(query) =~ "nodes"
+      assert inspect(query) =~ "Node"
     end
 
     test "single node with label and string property" do

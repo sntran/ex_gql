@@ -7,10 +7,9 @@ defmodule OpenGQL.Schema.Edge do
       CREATE TABLE edges (
         source TEXT,
         target TEXT,
-        rel    TEXT,   -- relationship type
-        value  TEXT    -- JSON: edge properties
+        rel    TEXT,
+        value  TEXT
       );
-
   """
 
   use Ecto.Schema
@@ -21,5 +20,17 @@ defmodule OpenGQL.Schema.Edge do
     field :target, :string
     field :rel, :string
     field :value, :string
+
+    belongs_to :source_node, OpenGQL.Schema.Node,
+      foreign_key: :source,
+      references: :key,
+      type: :string,
+      define_field: false
+
+    belongs_to :target_node, OpenGQL.Schema.Node,
+      foreign_key: :target,
+      references: :key,
+      type: :string,
+      define_field: false
   end
 end
