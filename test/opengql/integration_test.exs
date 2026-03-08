@@ -1,8 +1,19 @@
 defmodule OpenGQL.IntegrationTest do
   use OpenGQL.DataCase, async: false
+  use ExUnitProperties
 
   # Helper: run a GQL statement against the test SQLite repo.
   defp run(stmt), do: OpenGQL.execute(stmt, &Repo.query/2)
+
+  # Generator for valid GQL identifier characters (letters + digits, starts with letter)
+  defp valid_name_gen do
+    gen all(
+          first <- StreamData.string([?a..?z, ?A..?Z], length: 1),
+          rest <- StreamData.string([?a..?z, ?A..?Z, ?0..?9], min_length: 1, max_length: 12)
+        ) do
+      first <> rest
+    end
+  end
 
   # ── MATCH + RETURN ──────────────────────────────────────────────────────────
 
@@ -381,6 +392,256 @@ defmodule OpenGQL.IntegrationTest do
 
       assert is_list(results)
       assert length(results) == 3
+    end
+  end
+
+  # ── Repo.all with ~G sigil (Ecto.Queryable) ───────────────────────────────────
+
+  describe "Repo.all with MATCH statements (Ecto.Queryable)" do
+    test "Repo.all accepts a SELECT Statement directly" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+
+      stmt = ~G"MATCH (a:Person) RETURN a"
+      results = Repo.all(stmt)
+      assert is_list(results)
+      assert length(results) == 1
+    end
+
+    test "Repo.all returns string-keyed row maps for single-node queries" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+
+      [row] = Repo.all(~G"MATCH (a:Person) RETURN a")
+      assert Map.has_key?(row, "key")
+      assert Map.has_key?(row, "value")
+      assert row["key"] == ~s(["alice","Person"])
+    end
+
+    test "Repo.all result matches execute/2 result for single-node query" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      stmt = ~G"MATCH (a:Person) RETURN a"
+      {:ok, execute_rows} = run(stmt)
+      repo_rows = Repo.all(stmt)
+
+      assert length(repo_rows) == length(execute_rows)
+
+      execute_keys = execute_rows |> Enum.map(& &1["key"]) |> Enum.sort()
+      repo_keys = repo_rows |> Enum.map(& &1["key"]) |> Enum.sort()
+      assert execute_keys == repo_keys
+    end
+
+    test "Repo.all with label filter returns only matching nodes" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["corp","Company"]), value: ~s({"name":"Corp"})})
+
+      results = Repo.all(~G"MATCH (a:Person) RETURN a")
+      assert length(results) == 1
+      assert hd(results)["key"] == ~s(["alice","Person"])
+    end
+
+    test "Repo.all with property filter returns only matching nodes" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      results = Repo.all(~G[MATCH (a:Person {name: "Alice"}) RETURN a])
+      assert length(results) == 1
+      assert hd(results)["key"] == ~s(["alice","Person"])
+    end
+
+    test "Repo.all returns empty list when no nodes match" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+
+      results = Repo.all(~G"MATCH (a:Robot) RETURN a")
+      assert results == []
+    end
+
+    test "Repo.all with path query returns n1_key/n2_key row maps" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, _} =
+        Repo.insert(%Edge{
+          source: ~s(["alice","Person"]),
+          target: ~s(["bob","Person"]),
+          rel: "KNOWS"
+        })
+
+      [row] = Repo.all(~G"MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b")
+      assert row["n1_key"] == ~s(["alice","Person"])
+      assert row["n2_key"] == ~s(["bob","Person"])
+      assert Map.has_key?(row, "n1_value")
+      assert Map.has_key?(row, "n2_value")
+    end
+
+    test "Repo.all path result matches execute/2 result" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, _} =
+        Repo.insert(%Edge{
+          source: ~s(["alice","Person"]),
+          target: ~s(["bob","Person"]),
+          rel: "KNOWS"
+        })
+
+      stmt = ~G"MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b"
+      {:ok, execute_rows} = run(stmt)
+      repo_rows = Repo.all(stmt)
+
+      assert length(repo_rows) == length(execute_rows)
+
+      execute_pairs = execute_rows |> Enum.map(&{&1["n1_key"], &1["n2_key"]}) |> Enum.sort()
+      repo_pairs = repo_rows |> Enum.map(&{&1["n1_key"], &1["n2_key"]}) |> Enum.sort()
+      assert execute_pairs == repo_pairs
+    end
+
+    test "Repo.all with cross-join returns n1_key/n2_key row maps" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      rows = Repo.all(~G"MATCH (a:Person), (b:Person) RETURN a, b")
+      # 2 nodes × 2 = 4 cross-join pairs
+      assert length(rows) == 4
+      Enum.each(rows, fn row ->
+        assert Map.has_key?(row, "n1_key")
+        assert Map.has_key?(row, "n2_key")
+      end)
+    end
+
+    test "cross-join Repo.all result matches execute/2 result" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      stmt = ~G"MATCH (a:Person), (b:Person) RETURN a, b"
+      {:ok, execute_rows} = run(stmt)
+      repo_rows = Repo.all(stmt)
+
+      assert length(repo_rows) == length(execute_rows)
+    end
+
+    test "Repo.all raises for non-SELECT statements" do
+      stmt = ~G"MATCH (a:Person) DELETE a"
+
+      assert_raise ArgumentError, ~r/only.*SELECT/, fn ->
+        Repo.all(stmt)
+      end
+    end
+  end
+
+  # ── Property-based data consistency tests ─────────────────────────────────────
+
+  describe "data consistency (property-based)" do
+    # Runs the given function inside a transaction that is always rolled back,
+    # giving each property-test iteration a clean, isolated DB state without
+    # accumulating data between runs.
+    defp with_clean_db(fun) do
+      {:error, :rolled_back} =
+        Repo.transaction(fn ->
+          fun.()
+          # Always roll back so the next check iteration starts with a clean DB.
+          Repo.rollback(:rolled_back)
+        end)
+
+      :ok
+    end
+
+    property "data created via execute/2 CREATE is retrievable via Repo.all MATCH" do
+      check all(name <- valid_name_gen(), max_runs: 20) do
+        with_clean_db(fn ->
+          create_stmt =
+            OpenGQL.parse_and_build("CREATE (a:Person {name: \"#{name}\"})")
+
+          {:ok, _} = OpenGQL.execute(create_stmt, &Repo.query/2)
+
+          match_stmt =
+            OpenGQL.parse_and_build("MATCH (a:Person {name: \"#{name}\"}) RETURN a")
+
+          results = Repo.all(match_stmt)
+
+          assert length(results) == 1
+          row = hd(results)
+          assert row["key"] == "[\"#{name}\",\"Person\"]"
+          assert row["value"] =~ name
+        end)
+      end
+    end
+
+    property "Repo.all and execute/2 return identical results for any label" do
+      check all(
+              label <-
+                StreamData.string([?A..?Z], length: 1)
+                |> StreamData.bind(fn first ->
+                  StreamData.string([?a..?z, ?A..?Z, ?0..?9], min_length: 1, max_length: 8)
+                  |> StreamData.map(&(first <> &1))
+                end),
+              max_runs: 20
+            ) do
+        with_clean_db(fn ->
+          key = "[\"test\",\"#{label}\"]"
+          {:ok, _} = Repo.insert(%Node{key: key, value: ~s({"name":"test"})})
+
+          stmt = OpenGQL.parse_and_build("MATCH (a:#{label}) RETURN a")
+
+          {:ok, execute_rows} = OpenGQL.execute(stmt, &Repo.query/2)
+          repo_rows = Repo.all(stmt)
+
+          assert length(repo_rows) == length(execute_rows)
+
+          execute_keys = execute_rows |> Enum.map(& &1["key"]) |> Enum.sort()
+          repo_keys = repo_rows |> Enum.map(& &1["key"]) |> Enum.sort()
+          assert execute_keys == repo_keys
+        end)
+      end
+    end
+
+    property "creating N nodes via execute/2 means Repo.all returns N rows" do
+      check all(
+              names <-
+                StreamData.list_of(valid_name_gen(), min_length: 1, max_length: 5)
+                |> StreamData.map(&Enum.uniq/1)
+                |> StreamData.filter(&(length(&1) >= 1)),
+              max_runs: 15
+            ) do
+        with_clean_db(fn ->
+          Enum.each(names, fn name ->
+            create_stmt = OpenGQL.parse_and_build("CREATE (a:Person {name: \"#{name}\"})")
+            {:ok, _} = OpenGQL.execute(create_stmt, &Repo.query/2)
+          end)
+
+          results = Repo.all(~G"MATCH (a:Person) RETURN a")
+          assert length(results) == length(names)
+        end)
+      end
+    end
+
+    property "edge created via execute/2 is retrievable via Repo.all path query" do
+      check all(
+              src_name <- valid_name_gen(),
+              tgt_name <- valid_name_gen(),
+              src_name != tgt_name,
+              max_runs: 15
+            ) do
+        with_clean_db(fn ->
+          create_stmt =
+            OpenGQL.parse_and_build(
+              "CREATE (a:Person {name: \"#{src_name}\"})-[:KNOWS]->(b:Person {name: \"#{tgt_name}\"})"
+            )
+
+          {:ok, _} = OpenGQL.execute(create_stmt, &Repo.query/2)
+
+          path_stmt =
+            OpenGQL.parse_and_build(
+              "MATCH (a:Person {name: \"#{src_name}\"})-[:KNOWS]->(b:Person {name: \"#{tgt_name}\"}) RETURN a, b"
+            )
+
+          results = Repo.all(path_stmt)
+          assert length(results) == 1
+          row = hd(results)
+          assert row["n1_key"] == "[\"#{src_name}\",\"Person\"]"
+          assert row["n2_key"] == "[\"#{tgt_name}\",\"Person\"]"
+        end)
+      end
     end
   end
 end

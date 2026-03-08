@@ -44,6 +44,8 @@ end
 
 ## Usage
 
+### Via `OpenGQL.execute/2` (adapter-agnostic)
+
 ```elixir
 import OpenGQL
 
@@ -60,18 +62,38 @@ stmt = ~G"CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"
 {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
 # --- MATCH + SET ---
-# Returns %OpenGQL.Statement{type: :update}
 stmt = ~G"MATCH (a:Person) SET a.active = true"
 {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
 # --- MATCH + DELETE ---
-# Returns %OpenGQL.Statement{type: :delete}
 stmt = ~G"MATCH (a:Person) DELETE a"
 {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
 # --- MATCH + DETACH DELETE (removes edges first, then nodes) ---
 stmt = ~G"MATCH (a:Person) DETACH DELETE a"
 {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
+```
+
+### Via `Repo.all/2` (Ecto.Queryable)
+
+SELECT (`MATCH … RETURN`) statements implement the `Ecto.Queryable` protocol via
+`test/support/queryable.ex`, which is compiled in `:dev` and `:test` environments.
+This lets you pass a statement directly to `Repo.all/2`:
+
+```elixir
+import OpenGQL
+
+# Pass the Statement directly to Repo.all — returns the same string-keyed maps
+# as OpenGQL.execute/2
+results = Repo.all(~G"MATCH (a:Person) RETURN a")
+# results => [%{"key" => "[\"alice\",\"Person\"]", "value" => "{\"name\":\"Alice\"}"}]
+
+# With property filters
+results = Repo.all(~G[MATCH (a:Person {name: "Alice"}) RETURN a])
+
+# Path queries
+results = Repo.all(~G"MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b")
+# results => [%{"n1_key" => "...", "n1_value" => "...", "n2_key" => "...", "n2_value" => "..."}]
 ```
 
 ## Supported GQL Patterns
@@ -92,13 +114,13 @@ stmt = ~G"MATCH (a:Person) DETACH DELETE a"
 
 ## Return Types
 
-| GQL clause(s)           | Statement type  | `execute/2` returns          |
-|-------------------------|-----------------|------------------------------|
-| `MATCH … RETURN`        | `:select`       | `{:ok, [%{col => val}]}`     |
-| `CREATE …`              | `:insert`       | `{:ok, [result_per_op]}`     |
-| `MATCH … SET`           | `:update`       | `{:ok, result}`              |
-| `MATCH … DELETE`        | `:delete`       | `{:ok, result}`              |
-| `MATCH … DETACH DELETE` | `:delete`       | `{:ok, result}`              |
+| GQL clause(s)           | Statement type  | `execute/2` returns          | `Repo.all/2` |
+|-------------------------|-----------------|------------------------------|--------------|
+| `MATCH … RETURN`        | `:select`       | `{:ok, [%{col => val}]}`     | ✅ supported |
+| `CREATE …`              | `:insert`       | `{:ok, [result_per_op]}`     | ❌ use `execute/2` |
+| `MATCH … SET`           | `:update`       | `{:ok, result}`              | ❌ use `execute/2` |
+| `MATCH … DELETE`        | `:delete`       | `{:ok, result}`              | ❌ use `execute/2` |
+| `MATCH … DETACH DELETE` | `:delete`       | `{:ok, result}`              | ❌ use `execute/2` |
 
 ### SELECT column names
 

@@ -149,13 +149,17 @@ defmodule OpenGQL.QueryBuilder do
 
   # ── SELECT (MATCH + RETURN) ──────────────────────────────────────────────────
 
-  defp build_select(elements, _return_items) do
+   defp build_select(elements, _return_items) do
     nodes = for {:node, n} <- elements, do: n
     edges = for {:edge, e} <- elements, do: e
 
     case {nodes, edges} do
       {[], _} ->
-        %Statement{type: :select, operations: [{"SELECT key, value FROM nodes", []}]}
+        %Statement{
+          type: :select,
+          operations: [{"SELECT key, value FROM nodes", []}],
+          ast_info: %{kind: :all}
+        }
 
       {[node], []} ->
         build_single_node_select(node)
@@ -167,7 +171,11 @@ defmodule OpenGQL.QueryBuilder do
         build_cross_select(n1, n2)
 
       _ ->
-        %Statement{type: :select, operations: [{"SELECT key, value FROM nodes", []}]}
+        %Statement{
+          type: :select,
+          operations: [{"SELECT key, value FROM nodes", []}],
+          ast_info: %{kind: :all}
+        }
     end
   end
 
@@ -178,7 +186,11 @@ defmodule OpenGQL.QueryBuilder do
       "SELECT n.key, n.value FROM nodes AS n" <>
         where_clause(conditions)
 
-    %Statement{type: :select, operations: [{sql, params}]}
+    %Statement{
+      type: :select,
+      operations: [{sql, params}],
+      ast_info: %{kind: :single_node, labels: labels, props: props}
+    }
   end
 
   defp build_path_select(
@@ -198,7 +210,7 @@ defmodule OpenGQL.QueryBuilder do
 
         _ ->
           "INNER JOIN edges AS e ON (e.source = n1.key OR e.target = n1.key) " <>
-            "INNER JOIN nodes AS n2 ON (n2.key = e.target OR n2.key = e.source)"
+            "INNER JOIN nodes AS n2 ON (n2.key = e.target OR n2.key = e.source) AND n2.key != n1.key"
       end
 
     {n1_conds, n1_params} = node_conditions("n1", n1_labels, n1_props)
@@ -214,7 +226,17 @@ defmodule OpenGQL.QueryBuilder do
         "FROM nodes AS n1 #{join_sql}" <>
         where_clause(all_conditions)
 
-    %Statement{type: :select, operations: [{sql, all_params}]}
+    %Statement{
+      type: :select,
+      operations: [{sql, all_params}],
+      ast_info: %{
+        kind: :path,
+        dir: dir,
+        n1: %{labels: n1_labels, props: n1_props},
+        edge_types: edge_types,
+        n2: %{labels: n2_labels, props: n2_props}
+      }
+    }
   end
 
   defp build_cross_select(
@@ -233,7 +255,15 @@ defmodule OpenGQL.QueryBuilder do
         "FROM nodes AS n1 CROSS JOIN nodes AS n2" <>
         where_clause(all_conditions)
 
-    %Statement{type: :select, operations: [{sql, all_params}]}
+    %Statement{
+      type: :select,
+      operations: [{sql, all_params}],
+      ast_info: %{
+        kind: :cross,
+        n1: %{labels: n1_labels, props: n1_props},
+        n2: %{labels: n2_labels, props: n2_props}
+      }
+    }
   end
 
   # ── CREATE ───────────────────────────────────────────────────────────────────

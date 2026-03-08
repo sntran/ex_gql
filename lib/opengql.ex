@@ -37,10 +37,22 @@ defmodule OpenGQL do
 
   ## Executing statements
 
+  ### Via `OpenGQL.execute/2` (adapter-agnostic)
+
   Pass the statement and a SQL query function to `execute/2`:
 
       {:ok, rows} = OpenGQL.execute(stmt, &MyRepo.query/2)
       # rows => [%{"key" => "[\"alice\",\"Person\"]", "value" => "{\"name\":\"Alice\"}"}]
+
+  ### Via `Repo.all/2` (Ecto.Queryable)
+
+  SELECT statements implement the `Ecto.Queryable` protocol when the
+  `test/support/queryable.ex` protocol implementation is compiled (automatically
+  available in `:test` / `:dev` environments).  This lets you pass a statement
+  directly to any Ecto repo operation:
+
+      results = Repo.all(~G"MATCH (a:Person) RETURN a")
+      # returns the same string-keyed maps as execute/2
 
   ## Supported GQL clauses
 
