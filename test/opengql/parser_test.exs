@@ -125,6 +125,96 @@ defmodule OpenGQL.ParserTest do
     end
   end
 
+  describe "parse/1 - CREATE clause" do
+    test "create a single node" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[CREATE (a:Person {name: "Alice"})])
+
+      create = Keyword.get(clauses, :create)
+      assert [{:path, [{:node, attrs}]}] = create
+      assert Keyword.get(attrs, :labels) == ["Person"]
+    end
+
+    test "create two nodes with an edge" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(
+                 "CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
+               )
+
+      create = Keyword.get(clauses, :create)
+      assert [{:path, path_elements}] = create
+      assert [{:node, _}, {:edge_right, edge_attrs}, {:node, _}] = path_elements
+      assert Keyword.get(edge_attrs, :types) == ["KNOWS"]
+    end
+
+    test "MATCH then CREATE" do
+      gql =
+        ~S[MATCH (a:Person {name: "Alice"})] <>
+          ~S[, (b:Person {name: "Bob"})] <>
+          " CREATE (a)-[:FRIENDS_WITH]->(b) RETURN a, b"
+
+      assert {:ok, [{:statement, clauses}], "", _, _, _} = Parser.parse(gql)
+
+      assert Keyword.get(clauses, :match) != nil
+      assert Keyword.get(clauses, :create) != nil
+      assert Keyword.get(clauses, :return) == ["a", "b"]
+    end
+  end
+
+  describe "parse/1 - SET clause" do
+    test "single assignment" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) SET a.name = "Bob" RETURN a])
+
+      set = Keyword.get(clauses, :set)
+      assert [{:assignment, ["a", "name", {:string, "Bob"}]}] = set
+    end
+
+    test "multiple assignments" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) SET a.age = 30, a.active = true RETURN a")
+
+      set = Keyword.get(clauses, :set)
+      assert length(set) == 2
+      assert {:assignment, ["a", "age", {:integer, 30}]} = Enum.at(set, 0)
+      assert {:assignment, ["a", "active", {:boolean, true}]} = Enum.at(set, 1)
+    end
+
+    test "integer assignment" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) SET a.age = 42 RETURN a")
+
+      set = Keyword.get(clauses, :set)
+      assert [{:assignment, ["a", "age", {:integer, 42}]}] = set
+    end
+  end
+
+  describe "parse/1 - DELETE clause" do
+    test "plain DELETE" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) DELETE a")
+
+      delete = Keyword.get(clauses, :delete)
+      assert [{:vars, ["a"]}] = delete
+    end
+
+    test "DETACH DELETE" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) DETACH DELETE a")
+
+      detach = Keyword.get(clauses, :detach_delete)
+      assert [{:vars, ["a"]}] = detach
+    end
+
+    test "DELETE multiple variables" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person)-[:KNOWS]->(b:Person) DELETE a, b")
+
+      delete = Keyword.get(clauses, :delete)
+      assert [{:vars, ["a", "b"]}] = delete
+    end
+  end
+
   describe "property-based tests" do
     property "any valid GQL identifier is accepted as a variable" do
       check all(

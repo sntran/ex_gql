@@ -44,10 +44,19 @@ defmodule OpenGQL do
   alias OpenGQL.QueryBuilder
 
   @doc ~S"""
-  `~GQL` sigil — creates an `Ecto.Query` from a GQL MATCH statement.
+  `~GQL` sigil — creates an Ecto operation from a GQL statement.
 
   Requires Elixir >= 1.15 for the multi-character sigil syntax.
   On Elixir 1.14 you can use the `~G` alias defined in this module.
+
+  The return type depends on the GQL clause(s) present:
+
+  | Clause(s) | Return type |
+  |---|---|
+  | `MATCH … RETURN` | `Ecto.Query` (use with `Repo.all/1`) |
+  | `CREATE …` | `Ecto.Multi` (use with `Repo.transaction/1`) |
+  | `MATCH … DELETE` | `{:delete, Ecto.Query}` (use `Repo.delete_all/1` on the query) |
+  | `MATCH … SET` | `{:update, Ecto.Query, assignments}` (use `Repo.update_all/2`) |
 
   ## Examples
 

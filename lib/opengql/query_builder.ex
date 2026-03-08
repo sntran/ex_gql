@@ -332,25 +332,30 @@ defmodule OpenGQL.QueryBuilder do
     node_key_map = Map.new(nodes, fn n -> {n.var, build_node_key(n)} end)
 
     Enum.reduce(Enum.with_index(edges), multi, fn {edge, idx}, m ->
+      # For :left edges the relationship runs target→source in the data model,
+      # so we swap the variable names.
+      # For :right and :both we use source→target order as written.
       {source_key, target_key} =
         case edge.dir do
           :left ->
             {Map.get(node_key_map, edge.target_var), Map.get(node_key_map, edge.source_var)}
 
-          _ ->
+          dir when dir in [:right, :both] ->
             {Map.get(node_key_map, edge.source_var), Map.get(node_key_map, edge.target_var)}
         end
 
-      if source_key && target_key do
-        struct = %Edge{
-          source: source_key,
-          target: target_key,
-          rel: edge.rel
-        }
+      case {source_key, target_key} do
+        {nil, _} ->
+          raise ArgumentError,
+                "CREATE: source node variable #{inspect(edge.source_var)} not found in pattern"
 
-        Ecto.Multi.insert(m, {:edge, idx}, struct, on_conflict: :nothing)
-      else
-        m
+        {_, nil} ->
+          raise ArgumentError,
+                "CREATE: target node variable #{inspect(edge.target_var)} not found in pattern"
+
+        {src, tgt} ->
+          struct = %Edge{source: src, target: tgt, rel: edge.rel}
+          Ecto.Multi.insert(m, {:edge, idx}, struct, on_conflict: :nothing)
       end
     end)
   end
