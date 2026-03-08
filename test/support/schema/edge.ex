@@ -1,12 +1,12 @@
-defmodule OpenGQL.Schema.Edge do
+defmodule OpenGQL.Test.Edge do
   @moduledoc """
-  Ecto schema for graph edges.
+  Ecto schema for graph edges — used in tests only.
 
   ## Table Structure
 
       CREATE TABLE edges (
-        source TEXT,
-        target TEXT,
+        source TEXT REFERENCES nodes(key),
+        target TEXT REFERENCES nodes(key),
         rel    TEXT,
         value  TEXT
       );
@@ -21,13 +21,13 @@ defmodule OpenGQL.Schema.Edge do
     field :rel, :string
     field :value, :string
 
-    belongs_to :source_node, OpenGQL.Schema.Node,
+    belongs_to :source_node, OpenGQL.Test.Node,
       foreign_key: :source,
       references: :key,
       type: :string,
       define_field: false
 
-    belongs_to :target_node, OpenGQL.Schema.Node,
+    belongs_to :target_node, OpenGQL.Test.Node,
       foreign_key: :target,
       references: :key,
       type: :string,

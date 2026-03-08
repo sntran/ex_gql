@@ -1,50 +1,31 @@
 # OpenGQL
 
-An Elixir library for generating `Ecto.Query` using the
+An Elixir library for querying a SQLite graph database using a subset of the
 [Open Graph Query Language (GQL)](https://www.iso.org/standard/76120.html).
 
 ## Overview
 
-OpenGQL provides a `~GQL` sigil (requires Elixir ≥ 1.15; use `~G` on Elixir 1.14)
-that parses a subset of ISO GQL and returns an `Ecto.Query` ready to be executed
-with your Ecto `Repo`.
-
-The parser currently covers the **Match Pattern** subset:
-
-| Pattern | Example |
-|---------|---------|
-| Node | `MATCH (a:Person) RETURN a` |
-| Node with properties | `MATCH (a:Person {name: "Alice"}) RETURN a` |
-| Directed right edge | `MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b` |
-| Directed left edge | `MATCH (a:Person)<-[:KNOWS]-(b:Person) RETURN a, b` |
-| Multiple patterns | `MATCH (a:Person), (b:Person) RETURN a, b` |
+OpenGQL is **Ecto-free at the library level**.  The `~GQL` / `~G` sigils
+compile a GQL string into an `%OpenGQL.Statement{}` containing plain SQL + its
+bound parameters.  You execute the statement with any SQLite connection using
+`OpenGQL.execute/2` — including Ecto repos.
 
 ## Data Model
 
 OpenGQL targets the following SQLite graph schema:
 
 ```sql
-PRAGMA case_sensitive_like = true;
-
-CREATE TABLE IF NOT EXISTS nodes (
-  key   TEXT PRIMARY KEY NOT NULL, -- JSON serialized, either a string or [id, type]
-  value TEXT -- JSON serialized body
+CREATE TABLE nodes (
+  key   TEXT PRIMARY KEY NOT NULL, -- JSON: string or ["id", "Label"]
+  value TEXT                       -- JSON: property map
 );
 
-CREATE INDEX IF NOT EXISTS key_idx ON nodes(key);
-
-CREATE TABLE IF NOT EXISTS edges (
-  source     TEXT,
-  target     TEXT,
-  rel        TEXT, -- the relationship type
-  value      TEXT, -- properties of the edge, JSON serialized
-  UNIQUE(source, target, value) ON CONFLICT REPLACE,
-  FOREIGN KEY(source) REFERENCES nodes(key),
-  FOREIGN KEY(target) REFERENCES nodes(key)
+CREATE TABLE edges (
+  source TEXT REFERENCES nodes(key),
+  target TEXT REFERENCES nodes(key),
+  rel    TEXT,   -- relationship type
+  value  TEXT    -- JSON: edge properties
 );
-
-CREATE INDEX IF NOT EXISTS source_idx ON edges(source);
-CREATE INDEX IF NOT EXISTS target_idx ON edges(target);
 ```
 
 ## Installation
@@ -57,26 +38,88 @@ def deps do
 end
 ```
 
+> **Note** — OpenGQL has only one runtime dependency: `nimble_parsec`.  Ecto
+> and all SQLite adapters are optional; they are only used in the tests bundled
+> with this library.
+
 ## Usage
 
 ```elixir
 import OpenGQL
 
-# Elixir >= 1.15 — multi-character sigil
-query = ~GQL[MATCH (a:Person {name: "Alice"}) RETURN a]
-Repo.all(query)
+# --- MATCH + RETURN ---
+# Returns %OpenGQL.Statement{type: :select}
+stmt = ~G"MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person) RETURN a, b"
+{:ok, rows} = OpenGQL.execute(stmt, &MyRepo.query/2)
+# rows => [%{"n1_key" => "[\"alice\",\"Person\"]", "n1_value" => "...",
+#             "n2_key" => "[\"bob\",\"Person\"]",  "n2_value" => "..."}]
 
-# Elixir 1.14 — single-character alias
-query = ~G[MATCH (a:Person {name: "Alice"}) RETURN a]
-Repo.all(query)
+# --- CREATE ---
+# Returns %OpenGQL.Statement{type: :insert}
+stmt = ~G"CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
+{:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
-# Multi-line
-query = ~GQL"""
-  MATCH (a:Person {name: "Alice"})-[:KNOWS]->(b:Person)
-  RETURN a, b
-"""
-Repo.all(query)
+# --- MATCH + SET ---
+# Returns %OpenGQL.Statement{type: :update}
+stmt = ~G"MATCH (a:Person) SET a.active = true"
+{:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
+
+# --- MATCH + DELETE ---
+# Returns %OpenGQL.Statement{type: :delete}
+stmt = ~G"MATCH (a:Person) DELETE a"
+{:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
+
+# --- MATCH + DETACH DELETE (removes edges first, then nodes) ---
+stmt = ~G"MATCH (a:Person) DETACH DELETE a"
+{:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 ```
+
+## Supported GQL Patterns
+
+| Pattern                                   | Example GQL                                              |
+|-------------------------------------------|----------------------------------------------------------|
+| Node by label                             | `MATCH (a:Person) RETURN a`                              |
+| Node with properties                      | `MATCH (a:Person {name: "Alice"}) RETURN a`              |
+| Right-directed edge                       | `MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b`     |
+| Left-directed edge                        | `MATCH (a:Person)<-[:KNOWS]-(b:Person) RETURN a, b`     |
+| Multiple comma-separated patterns         | `MATCH (a:Person), (b:Person) RETURN a, b`              |
+| Create node                               | `CREATE (a:Person {name: "Alice"})`                     |
+| Create nodes and edge                     | `CREATE (a:Person {name: "Alice"})-[:KNOWS]->(b:Person {name: "Bob"})` |
+| Update properties                         | `MATCH (a:Person) SET a.age = 30`                       |
+| Delete matched nodes                      | `MATCH (a:Person) DELETE a`                             |
+| Detach delete (remove edges + node)       | `MATCH (a:Person) DETACH DELETE a`                      |
+| Compound: match then create               | `MATCH (a:Person), (b:Person) CREATE (a)-[:FRIENDS_WITH]->(b)` |
+
+## Return Types
+
+| GQL clause(s)           | Statement type  | `execute/2` returns          |
+|-------------------------|-----------------|------------------------------|
+| `MATCH … RETURN`        | `:select`       | `{:ok, [%{col => val}]}`     |
+| `CREATE …`              | `:insert`       | `{:ok, [result_per_op]}`     |
+| `MATCH … SET`           | `:update`       | `{:ok, result}`              |
+| `MATCH … DELETE`        | `:delete`       | `{:ok, result}`              |
+| `MATCH … DETACH DELETE` | `:delete`       | `{:ok, result}`              |
+
+### SELECT column names
+
+- Single-node query (`MATCH (a:…) RETURN a`): columns `"key"`, `"value"`
+- Path / cross-join query (`RETURN a, b`): columns `"n1_key"`, `"n1_value"`, `"n2_key"`, `"n2_value"`
+
+## `OpenGQL.execute/2`
+
+```elixir
+OpenGQL.execute(statement, query_fn)
+```
+
+`query_fn` is any `(sql, params) -> {:ok, result} | {:error, reason}` function.
+For Ecto repos pass `&MyRepo.query/2`.
+
+## Elixir Version Compatibility
+
+| Sigil   | Minimum Elixir |
+|---------|----------------|
+| `~GQL`  | 1.15 (multi-character sigils) |
+| `~G`    | 1.14           |
 
 ## Running Tests
 

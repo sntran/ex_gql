@@ -1,19 +1,25 @@
 defmodule OpenGQL.QueryBuilder do
   @moduledoc """
-  Converts a parsed GQL AST into Ecto operations.
+  Converts a parsed GQL AST into an `OpenGQL.Statement` containing plain SQL
+  operations and their bound parameters.
 
-  Returns:
-  - `Ecto.Query` for MATCH+RETURN (SELECT)
-  - `Ecto.Multi` for CREATE
-  - `{:delete, Ecto.Query}` for MATCH+DELETE
-  - `{:update, Ecto.Query, assignments}` for MATCH+SET
+  No Ecto dependency — returns `%OpenGQL.Statement{}` structs that can be
+  executed against any SQL (SQLite) connection via `OpenGQL.execute/2`.
+
+  ## Operation mapping
+
+  | GQL clause(s)           | Statement type | SQL produced                    |
+  |-------------------------|----------------|---------------------------------|
+  | `MATCH … RETURN`        | `:select`      | `SELECT … FROM nodes [JOIN …]`  |
+  | `CREATE …`              | `:insert`      | `INSERT INTO nodes / edges …`   |
+  | `MATCH … SET`           | `:update`      | `UPDATE nodes SET … WHERE …`    |
+  | `MATCH … DELETE`        | `:delete`      | `DELETE FROM nodes WHERE …`     |
+  | `MATCH … DETACH DELETE` | `:delete`      | edge delete + node delete       |
   """
 
-  import Ecto.Query
+  alias OpenGQL.Statement
 
-  alias OpenGQL.Schema.Node
-  alias OpenGQL.Schema.Edge
-
+  @doc "Builds a `Statement` from the AST produced by `OpenGQL.Parser.parse/1`."
   def build([{:statement, clauses}]) do
     match_elements = get_path_elements(clauses, :match)
     create_elements = get_path_elements(clauses, :create)
@@ -29,30 +35,29 @@ defmodule OpenGQL.QueryBuilder do
           delete_vars == [] and detach_delete_vars == [] ->
         build_select(match_elements, return_items)
 
-      # CREATE without MATCH
-      create_elements != [] and match_elements == [] ->
+      # CREATE (with or without preceding MATCH)
+      create_elements != [] ->
         build_create(create_elements)
-
-      # MATCH + CREATE
-      create_elements != [] and match_elements != [] ->
-        build_match_create(match_elements, create_elements)
 
       # MATCH + SET
       set_assignments != [] ->
         build_update(match_elements, set_assignments)
 
-      # MATCH + DELETE or DETACH DELETE
-      delete_vars != [] or detach_delete_vars != [] ->
-        vars = delete_vars ++ detach_delete_vars
-        build_delete(match_elements, vars)
+      # MATCH + DETACH DELETE
+      detach_delete_vars != [] ->
+        build_detach_delete(match_elements)
 
-      # Fallback to select
+      # MATCH + DELETE
+      delete_vars != [] ->
+        build_delete(match_elements)
+
+      # Fallback: select all nodes
       true ->
         build_select(match_elements, return_items)
     end
   end
 
-  # ── Helpers for extracting clause data ────────────────────────────────────────
+  # ── Helpers for extracting clause data ──────────────────────────────────────
 
   defp get_path_elements(clauses, key) do
     case Keyword.get(clauses, key, []) do
@@ -71,8 +76,7 @@ defmodule OpenGQL.QueryBuilder do
         []
 
       assignments ->
-        assignments
-        |> Enum.flat_map(fn
+        Enum.flat_map(assignments, fn
           {:assignment, [var, prop, {_type, val}]} -> [{var, prop, val}]
           _ -> []
         end)
@@ -81,15 +85,12 @@ defmodule OpenGQL.QueryBuilder do
 
   defp get_delete_vars(clauses, key) do
     case Keyword.get(clauses, key, []) do
-      [] ->
-        []
-
-      vars_data ->
-        for {:vars, var_list} <- vars_data, var <- var_list, do: var
+      [] -> []
+      vars_data -> for {:vars, var_list} <- vars_data, var <- var_list, do: var
     end
   end
 
-  # ── Path parsing ───────────────────────────────────────────────────────────────
+  # ── Path parsing ──────────────────────────────────────────────────────────────
 
   defp parse_path(elements) do
     Enum.map(elements, fn
@@ -146,177 +147,246 @@ defmodule OpenGQL.QueryBuilder do
     |> Map.new()
   end
 
-  # ── SELECT (MATCH + RETURN) ────────────────────────────────────────────────────
+  # ── SELECT (MATCH + RETURN) ──────────────────────────────────────────────────
 
   defp build_select(elements, _return_items) do
     nodes = for {:node, n} <- elements, do: n
     edges = for {:edge, e} <- elements, do: e
 
     case {nodes, edges} do
-      {[], _} -> from(n in Node, select: n)
-      {[node], []} -> build_single_node_query(node)
-      {[n1, n2], [edge]} -> build_path_query(n1, edge, n2)
-      {[n1, n2], []} -> build_cross_query(n1, n2)
-      _ -> from(n in Node, select: n)
+      {[], _} ->
+        %Statement{type: :select, operations: [{"SELECT key, value FROM nodes", []}]}
+
+      {[node], []} ->
+        build_single_node_select(node)
+
+      {[n1, n2], [edge]} ->
+        build_path_select(n1, edge, n2)
+
+      {[n1, n2], []} ->
+        build_cross_select(n1, n2)
+
+      _ ->
+        %Statement{type: :select, operations: [{"SELECT key, value FROM nodes", []}]}
     end
   end
 
-  defp build_single_node_query(%{labels: labels, props: props}) do
-    q = from(n in Node)
+  defp build_single_node_select(%{labels: labels, props: props}) do
+    {conditions, params} = node_conditions("n", labels, props)
 
-    q =
-      Enum.reduce(labels, q, fn label, acc ->
-        from(n in acc, where: fragment("json_extract(?, '$[1]') = ?", n.key, ^label))
-      end)
+    sql =
+      "SELECT n.key, n.value FROM nodes AS n" <>
+        where_clause(conditions)
 
-    q =
-      Enum.reduce(props, q, fn {key, val}, acc ->
-        path = "$.#{key}"
-        from(n in acc, where: fragment("json_extract(?, ?) = ?", n.value, ^path, ^val))
-      end)
-
-    from(n in q, select: n)
+    %Statement{type: :select, operations: [{sql, params}]}
   end
 
-  defp build_path_query(
+  defp build_path_select(
          %{labels: n1_labels, props: n1_props},
          %{dir: dir, types: edge_types},
          %{labels: n2_labels, props: n2_props}
        ) do
-    q = from(n1 in Node, as: :n1)
-
-    q =
+    join_sql =
       case dir do
         :right ->
-          q
-          |> join(:inner, [n1: n1], e in Edge, as: :e, on: e.source == n1.key)
-          |> join(:inner, [e: e], n2 in Node, as: :n2, on: n2.key == e.target)
+          "INNER JOIN edges AS e ON e.source = n1.key " <>
+            "INNER JOIN nodes AS n2 ON n2.key = e.target"
 
         :left ->
-          q
-          |> join(:inner, [n1: n1], e in Edge, as: :e, on: e.target == n1.key)
-          |> join(:inner, [e: e], n2 in Node, as: :n2, on: n2.key == e.source)
+          "INNER JOIN edges AS e ON e.target = n1.key " <>
+            "INNER JOIN nodes AS n2 ON n2.key = e.source"
 
         _ ->
-          q
-          |> join(:inner, [n1: n1], e in Edge,
-            as: :e,
-            on: e.source == n1.key or e.target == n1.key
-          )
-          |> join(:inner, [e: e], n2 in Node,
-            as: :n2,
-            on: n2.key == e.target or n2.key == e.source
-          )
+          "INNER JOIN edges AS e ON (e.source = n1.key OR e.target = n1.key) " <>
+            "INNER JOIN nodes AS n2 ON (n2.key = e.target OR n2.key = e.source)"
       end
 
-    q =
-      Enum.reduce(n1_labels, q, fn label, acc ->
-        where(acc, [n1: n1], fragment("json_extract(?, '$[1]') = ?", n1.key, ^label))
-      end)
+    {n1_conds, n1_params} = node_conditions("n1", n1_labels, n1_props)
+    {edge_conds, edge_params} = edge_conditions(edge_types)
+    {n2_conds, n2_params} = node_conditions("n2", n2_labels, n2_props)
 
-    q =
-      Enum.reduce(n1_props, q, fn {key, val}, acc ->
-        path = "$.#{key}"
-        where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.value, ^path, ^val))
-      end)
+    all_conditions = n1_conds ++ edge_conds ++ n2_conds
+    all_params = n1_params ++ edge_params ++ n2_params
 
-    q =
-      Enum.reduce(edge_types, q, fn type, acc ->
-        where(acc, [e: e], e.rel == ^type)
-      end)
+    sql =
+      "SELECT n1.key AS n1_key, n1.value AS n1_value, " <>
+        "n2.key AS n2_key, n2.value AS n2_value " <>
+        "FROM nodes AS n1 #{join_sql}" <>
+        where_clause(all_conditions)
 
-    q =
-      Enum.reduce(n2_labels, q, fn label, acc ->
-        where(acc, [n2: n2], fragment("json_extract(?, '$[1]') = ?", n2.key, ^label))
-      end)
-
-    q =
-      Enum.reduce(n2_props, q, fn {key, val}, acc ->
-        path = "$.#{key}"
-        where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.value, ^path, ^val))
-      end)
-
-    from([n1: n1, n2: n2] in q, select: {n1, n2})
+    %Statement{type: :select, operations: [{sql, all_params}]}
   end
 
-  defp build_cross_query(
+  defp build_cross_select(
          %{labels: n1_labels, props: n1_props},
          %{labels: n2_labels, props: n2_props}
        ) do
-    q = from(n1 in Node, as: :n1, cross_join: n2 in Node, as: :n2)
+    {n1_conds, n1_params} = node_conditions("n1", n1_labels, n1_props)
+    {n2_conds, n2_params} = node_conditions("n2", n2_labels, n2_props)
 
-    q =
-      Enum.reduce(n1_labels, q, fn label, acc ->
-        where(acc, [n1: n1], fragment("json_extract(?, '$[1]') = ?", n1.key, ^label))
-      end)
+    all_conditions = n1_conds ++ n2_conds
+    all_params = n1_params ++ n2_params
 
-    q =
-      Enum.reduce(n1_props, q, fn {key, val}, acc ->
-        path = "$.#{key}"
-        where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.value, ^path, ^val))
-      end)
+    sql =
+      "SELECT n1.key AS n1_key, n1.value AS n1_value, " <>
+        "n2.key AS n2_key, n2.value AS n2_value " <>
+        "FROM nodes AS n1 CROSS JOIN nodes AS n2" <>
+        where_clause(all_conditions)
 
-    q =
-      Enum.reduce(n2_labels, q, fn label, acc ->
-        where(acc, [n2: n2], fragment("json_extract(?, '$[1]') = ?", n2.key, ^label))
-      end)
-
-    q =
-      Enum.reduce(n2_props, q, fn {key, val}, acc ->
-        path = "$.#{key}"
-        where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.value, ^path, ^val))
-      end)
-
-    from([n1: n1, n2: n2] in q, select: {n1, n2})
+    %Statement{type: :select, operations: [{sql, all_params}]}
   end
 
-  # ── CREATE ─────────────────────────────────────────────────────────────────────
+  # ── CREATE ───────────────────────────────────────────────────────────────────
 
   defp build_create(elements) do
-    {nodes, edges} = extract_nodes_and_edges(elements)
-    multi = Ecto.Multi.new()
-    multi = insert_nodes_into_multi(multi, nodes)
-    multi = insert_edges_into_multi(multi, edges, nodes)
-    multi
-  end
-
-  defp build_match_create(_match_elements, create_elements) do
-    build_create(create_elements)
-  end
-
-  defp extract_nodes_and_edges(elements) do
     nodes = for {:node, n} <- elements, n.var != nil, do: n
-    edges = extract_edge_triples(elements)
-    {nodes, edges}
+    edge_triples = extract_edge_triples(elements)
+    node_key_map = Map.new(nodes, fn n -> {n.var, build_node_key(n)} end)
+
+    node_ops =
+      Enum.map(nodes, fn node ->
+        key = build_node_key(node)
+        value = encode_props(node.props)
+        {"INSERT INTO nodes (key, value) VALUES (?, ?) ON CONFLICT DO NOTHING", [key, value]}
+      end)
+
+    edge_ops =
+      Enum.flat_map(edge_triples, fn edge ->
+        # For :left edges the relationship runs target->source in the data model.
+        # For :right and :both we use source->target order as written.
+        {source_key, target_key} =
+          case edge.dir do
+            :left ->
+              {Map.get(node_key_map, edge.target_var),
+               Map.get(node_key_map, edge.source_var)}
+
+            dir when dir in [:right, :both] ->
+              {Map.get(node_key_map, edge.source_var),
+               Map.get(node_key_map, edge.target_var)}
+          end
+
+        case {source_key, target_key} do
+          {nil, _} ->
+            raise ArgumentError,
+                  "CREATE: source node variable #{inspect(edge.source_var)} not found in pattern"
+
+          {_, nil} ->
+            raise ArgumentError,
+                  "CREATE: target node variable #{inspect(edge.target_var)} not found in pattern"
+
+          {src, tgt} ->
+            [
+              {"INSERT INTO edges (source, target, rel) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+               [src, tgt, edge.rel]}
+            ]
+        end
+      end)
+
+    %Statement{type: :insert, operations: node_ops ++ edge_ops}
   end
 
-  defp extract_edge_triples(elements) do
-    extract_edge_triples(elements, [])
+  defp extract_edge_triples(elements), do: do_extract_edge_triples(elements, [])
+
+  defp do_extract_edge_triples([], acc), do: Enum.reverse(acc)
+
+  defp do_extract_edge_triples([{:node, n1}, {:edge, e}, {:node, n2} | rest], acc) do
+    triple = %{source_var: n1.var, target_var: n2.var, rel: List.first(e.types), dir: e.dir}
+    do_extract_edge_triples([{:node, n2} | rest], [triple | acc])
   end
 
-  defp extract_edge_triples([], acc), do: Enum.reverse(acc)
+  defp do_extract_edge_triples([_ | rest], acc), do: do_extract_edge_triples(rest, acc)
 
-  defp extract_edge_triples([{:node, n1}, {:edge, e}, {:node, n2} | rest], acc) do
-    edge_info = %{
-      source_var: n1.var,
-      target_var: n2.var,
-      rel: List.first(e.types),
-      dir: e.dir
+  # ── UPDATE (MATCH + SET) ──────────────────────────────────────────────────────
+
+  defp build_update(match_elements, assignments) do
+    nodes = for {:node, n} <- match_elements, do: n
+
+    {where_conds, where_params} =
+      case nodes do
+        [node | _] -> node_conditions("n", node.labels, node.props)
+        [] -> {[], []}
+      end
+
+    # Build: json_set(value, '$.prop1', ?, '$.prop2', ?, ...)
+    {json_set_args, set_params} =
+      Enum.reduce(assignments, {[], []}, fn {_var, prop, val}, {args, params} ->
+        {args ++ ["'$.#{prop}'", "?"], params ++ [val]}
+      end)
+
+    set_expr = "json_set(value, #{Enum.join(json_set_args, ", ")})"
+    sql = "UPDATE nodes AS n SET value = #{set_expr}" <> where_clause(where_conds)
+    params = set_params ++ where_params
+
+    %Statement{type: :update, operations: [{sql, params}]}
+  end
+
+  # ── DELETE (MATCH + DELETE) ───────────────────────────────────────────────────
+
+  defp build_delete(match_elements) do
+    nodes = for {:node, n} <- match_elements, do: n
+
+    {where_conds, where_params} =
+      case nodes do
+        [node | _] -> node_conditions("n", node.labels, node.props)
+        [] -> {[], []}
+      end
+
+    sql = "DELETE FROM nodes AS n" <> where_clause(where_conds)
+    %Statement{type: :delete, operations: [{sql, where_params}]}
+  end
+
+  defp build_detach_delete(match_elements) do
+    nodes = for {:node, n} <- match_elements, do: n
+
+    {where_conds, where_params} =
+      case nodes do
+        [node | _] -> node_conditions("n", node.labels, node.props)
+        [] -> {[], []}
+      end
+
+    subq = "(SELECT key FROM nodes AS n" <> where_clause(where_conds) <> ")"
+    edge_sql = "DELETE FROM edges WHERE source IN #{subq} OR target IN #{subq}"
+    node_sql = "DELETE FROM nodes AS n" <> where_clause(where_conds)
+
+    # Edge delete runs first; the subquery params appear twice — once for
+    # the `source IN` clause and once for the `target IN` clause.
+    %Statement{
+      type: :delete,
+      operations: [
+        {edge_sql, where_params ++ where_params},
+        {node_sql, where_params}
+      ]
     }
-
-    extract_edge_triples([{:node, n2} | rest], [edge_info | acc])
   end
 
-  defp extract_edge_triples([_ | rest], acc), do: extract_edge_triples(rest, acc)
+  # ── SQL helpers ───────────────────────────────────────────────────────────────
 
-  defp insert_nodes_into_multi(multi, nodes) do
-    Enum.reduce(nodes, multi, fn node, m ->
-      key = build_node_key(node)
-      value = encode_props(node.props)
-      struct = %Node{key: key, value: value}
-      Ecto.Multi.insert(m, {:node, node.var}, struct, on_conflict: :nothing)
+  # Returns {[condition_string], [param_value]} for a node alias.
+  defp node_conditions(alias_name, labels, props) do
+    label_conds =
+      Enum.map(labels, fn label ->
+        {"json_extract(#{alias_name}.key, '$[1]') = ?", label}
+      end)
+
+    prop_conds =
+      Enum.flat_map(props, fn {key, val} ->
+        [{"json_extract(#{alias_name}.value, '$.#{key}') = ?", val}]
+      end)
+
+    all = label_conds ++ prop_conds
+    {Enum.map(all, &elem(&1, 0)), Enum.map(all, &elem(&1, 1))}
+  end
+
+  defp edge_conditions(types) do
+    Enum.reduce(types, {[], []}, fn type, {conds, params} ->
+      {conds ++ ["e.rel = ?"], params ++ [type]}
     end)
   end
+
+  defp where_clause([]), do: ""
+  defp where_clause(conds), do: " WHERE " <> Enum.join(conds, " AND ")
+
+  # ── Node key / JSON encoding ──────────────────────────────────────────────────
 
   defp build_node_key(%{var: var, labels: [], props: props}) do
     name = Map.get(props, "name", var)
@@ -327,82 +397,6 @@ defmodule OpenGQL.QueryBuilder do
     name = Map.get(props, "name", var)
     encode_json_array([to_string(name), label])
   end
-
-  defp insert_edges_into_multi(multi, edges, nodes) do
-    node_key_map = Map.new(nodes, fn n -> {n.var, build_node_key(n)} end)
-
-    Enum.reduce(Enum.with_index(edges), multi, fn {edge, idx}, m ->
-      # For :left edges the relationship runs target→source in the data model,
-      # so we swap the variable names.
-      # For :right and :both we use source→target order as written.
-      {source_key, target_key} =
-        case edge.dir do
-          :left ->
-            {Map.get(node_key_map, edge.target_var), Map.get(node_key_map, edge.source_var)}
-
-          dir when dir in [:right, :both] ->
-            {Map.get(node_key_map, edge.source_var), Map.get(node_key_map, edge.target_var)}
-        end
-
-      case {source_key, target_key} do
-        {nil, _} ->
-          raise ArgumentError,
-                "CREATE: source node variable #{inspect(edge.source_var)} not found in pattern"
-
-        {_, nil} ->
-          raise ArgumentError,
-                "CREATE: target node variable #{inspect(edge.target_var)} not found in pattern"
-
-        {src, tgt} ->
-          struct = %Edge{source: src, target: tgt, rel: edge.rel}
-          Ecto.Multi.insert(m, {:edge, idx}, struct, on_conflict: :nothing)
-      end
-    end)
-  end
-
-  # ── UPDATE (SET) ───────────────────────────────────────────────────────────────
-
-  defp build_update(match_elements, assignments) do
-    nodes = for {:node, n} <- match_elements, do: n
-
-    base_query =
-      case nodes do
-        [node | _] -> build_single_node_query_no_select(node)
-        [] -> from(n in Node)
-      end
-
-    {:update, base_query, assignments}
-  end
-
-  defp build_single_node_query_no_select(%{labels: labels, props: props}) do
-    q = from(n in Node)
-
-    q =
-      Enum.reduce(labels, q, fn label, acc ->
-        from(n in acc, where: fragment("json_extract(?, '$[1]') = ?", n.key, ^label))
-      end)
-
-    Enum.reduce(props, q, fn {key, val}, acc ->
-      path = "$.#{key}"
-      from(n in acc, where: fragment("json_extract(?, ?) = ?", n.value, ^path, ^val))
-    end)
-  end
-
-  # ── DELETE ─────────────────────────────────────────────────────────────────────
-
-  defp build_delete(match_elements, _vars) do
-    nodes = for {:node, n} <- match_elements, do: n
-
-    base_query =
-      case nodes do
-        [node | _] -> build_single_node_query_no_select(node)
-        [] -> from(n in Node)
-      end
-
-    {:delete, base_query}
-  end
-
-  # ── JSON encoding helpers ──────────────────────────────────────────────────────
 
   defp encode_json_string(s) when is_binary(s) do
     escaped =
