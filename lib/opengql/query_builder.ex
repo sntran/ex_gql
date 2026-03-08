@@ -165,7 +165,10 @@ defmodule OpenGQL.QueryBuilder do
     from([n1: n1, n2: n2] in q, select: {n1, n2})
   end
 
-  defp build_cross_query(%{labels: n1_labels, props: n1_props}, %{labels: n2_labels, props: n2_props}) do
+  defp build_cross_query(
+         %{labels: n1_labels, props: n1_props},
+         %{labels: n2_labels, props: n2_props}
+       ) do
     q = from(n1 in "nodes", as: :n1, cross_join: n2 in "nodes", as: :n2)
 
     q =

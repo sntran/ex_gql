@@ -1,4 +1,4 @@
-defmodule Opengql.MixProject do
+defmodule OpenGQL.MixProject do
   use Mix.Project
 
   def project do
