@@ -26,14 +26,11 @@ defmodule OpenGQL do
       import OpenGQL
 
       # Match a single node
-      query = ~G"MATCH (a:Person {name: \\"Alice\\"}) RETURN a"
+      query = ~G[MATCH (a:Person {name: "Alice"}) RETURN a]
       Repo.all(query)
 
       # Match a relationship
-      query = ~G\"""
-        MATCH (a:Person {name: "Alice"})-[:KNOWS]->(b:Person)
-        RETURN a, b
-      \"""
+      query = ~G[MATCH (a:Person {name: "Alice"})-[:KNOWS]->(b:Person) RETURN a, b]
       Repo.all(query)
 
   """
