@@ -417,7 +417,7 @@ defmodule OpenGQL.QueryBuilder do
     "[#{Enum.map_join(items, ",", &encode_json_string/1)}]"
   end
 
-  defp encode_props(props) when map_size(props) == 0, do: "{}"
+  defp encode_props(props) when is_map(props) and map_size(props) == 0, do: "{}"
 
   defp encode_props(props) do
     pairs =
