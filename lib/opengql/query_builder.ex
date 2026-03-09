@@ -35,7 +35,12 @@ defmodule OpenGQL.QueryBuilder do
           delete_vars == [] and detach_delete_vars == [] ->
         build_select(match_elements, return_items)
 
-      # CREATE (with or without preceding MATCH)
+      # Compound MATCH + CREATE — not yet supported
+      create_elements != [] and match_elements != [] ->
+        raise ArgumentError,
+              "compound MATCH + CREATE is not yet supported; use CREATE and MATCH as separate statements"
+
+      # Pure CREATE
       create_elements != [] ->
         build_create(create_elements)
 
@@ -171,11 +176,9 @@ defmodule OpenGQL.QueryBuilder do
         build_cross_select(n1, n2)
 
       _ ->
-        %Statement{
-          type: :select,
-          operations: [{"SELECT key, value FROM nodes", []}],
-          ast_info: %{kind: :all}
-        }
+        raise ArgumentError,
+              "unsupported MATCH pattern: #{length(nodes)} node(s) and #{length(edges)} edge(s). " <>
+                "Supported patterns: single node, two-node path with one edge, two-node cross join."
     end
   end
 
@@ -271,6 +274,13 @@ defmodule OpenGQL.QueryBuilder do
   defp build_create(elements) do
     nodes = for {:node, n} <- elements, n.var != nil, do: n
     edge_triples = extract_edge_triples(elements)
+
+    if nodes == [] and edge_triples == [] do
+      raise ArgumentError,
+            "CREATE: pattern has no named nodes; assign a variable to each node, " <>
+              "e.g. CREATE (a:Person) instead of CREATE (:Person)"
+    end
+
     node_key_map = Map.new(nodes, fn n -> {n.var, build_node_key(n)} end)
 
     node_ops =
@@ -330,6 +340,23 @@ defmodule OpenGQL.QueryBuilder do
 
   defp build_update(match_elements, assignments) do
     nodes = for {:node, n} <- match_elements, do: n
+
+    primary_var =
+      case nodes do
+        [node | _] -> node.var
+        [] -> nil
+      end
+
+    # Validate all assignments target the matched variable
+    if primary_var != nil do
+      Enum.each(assignments, fn {var, _prop, _val} ->
+        if var != primary_var do
+          raise ArgumentError,
+                "SET targets variable #{inspect(var)} but MATCH binds #{inspect(primary_var)}; " <>
+                  "only the matched variable can be updated"
+        end
+      end)
+    end
 
     {where_conds, where_params} =
       case nodes do
@@ -392,25 +419,35 @@ defmodule OpenGQL.QueryBuilder do
   # ── SQL helpers ───────────────────────────────────────────────────────────────
 
   # Returns {[condition_string], [param_value]} for a node alias.
+  # Labels are matched by position in the JSON key array ($[1], $[2], ...).
+  # Nil property values use IS NULL rather than = ?, because SQL `= NULL` never matches.
   defp node_conditions(alias_name, labels, props) do
     label_conds =
-      Enum.map(labels, fn label ->
-        {"json_extract(#{alias_name}.key, '$[1]') = ?", label}
+      labels
+      |> Enum.with_index(1)
+      |> Enum.map(fn {label, idx} when is_binary(label) ->
+        "json_extract(#{alias_name}.key, '$[#{idx}]') = ?"
       end)
 
-    prop_conds =
-      Enum.flat_map(props, fn {key, val} ->
-        [{"json_extract(#{alias_name}.value, '$.#{key}') = ?", val}]
+    label_params = labels
+
+    {prop_conds, prop_params} =
+      Enum.reduce(props, {[], []}, fn {key, val}, {conds, params} ->
+        if is_nil(val) do
+          {conds ++ ["json_extract(#{alias_name}.value, '$.#{key}') IS NULL"], params}
+        else
+          {conds ++ ["json_extract(#{alias_name}.value, '$.#{key}') = ?"], params ++ [val]}
+        end
       end)
 
-    all = label_conds ++ prop_conds
-    {Enum.map(all, &elem(&1, 0)), Enum.map(all, &elem(&1, 1))}
+    {label_conds ++ prop_conds, label_params ++ prop_params}
   end
 
+  defp edge_conditions([]), do: {[], []}
+
   defp edge_conditions(types) do
-    Enum.reduce(types, {[], []}, fn type, {conds, params} ->
-      {conds ++ ["e.rel = ?"], params ++ [type]}
-    end)
+    placeholders = List.duplicate("?", length(types)) |> Enum.join(",")
+    {["e.rel IN (#{placeholders})"], types}
   end
 
   defp where_clause([]), do: ""
@@ -423,9 +460,9 @@ defmodule OpenGQL.QueryBuilder do
     encode_json_string(to_string(name))
   end
 
-  defp build_node_key(%{var: var, labels: [label | _], props: props}) do
+  defp build_node_key(%{var: var, labels: labels, props: props}) when labels != [] do
     name = Map.get(props, "name", var)
-    encode_json_array([to_string(name), label])
+    encode_json_array([to_string(name) | labels])
   end
 
   defp encode_json_string(s) when is_binary(s) do

@@ -93,6 +93,54 @@ defmodule OpenGQL.QueryBuilderTest do
 
       assert "KNOWS" in params
     end
+
+    test "multi-type edge uses IN clause in SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person)-[:KNOWS|LIKES]->(b:Person) RETURN a, b")
+
+      assert sql =~ "IN ("
+      assert "KNOWS" in params
+      assert "LIKES" in params
+    end
+
+    test "multi-type edge SQL does not use AND between types" do
+      %Statement{operations: [{sql, _}]} =
+        build("MATCH (a:Person)-[:KNOWS|LIKES]->(b:Person) RETURN a, b")
+
+      # Both types must be in a single IN clause, not ANDed separate conditions
+      refute sql =~ "e.rel = ?"
+    end
+  end
+
+  # ── SELECT — null property conditions ────────────────────────────────────────
+
+  describe "build/1 - node_conditions null handling" do
+    test "null property filter uses IS NULL instead of = ?" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person {ref: null}) RETURN a])
+
+      assert sql =~ "IS NULL"
+      refute nil in params
+    end
+
+    test "multi-label node SELECT uses positional label indexing" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person:Employee) RETURN a")
+
+      # $[1] checks first label, $[2] checks second label
+      assert sql =~ "'$[1]'"
+      assert sql =~ "'$[2]'"
+      assert "Person" in params
+      assert "Employee" in params
+    end
+
+    test "multi-label node SELECT has both labels in params" do
+      %Statement{operations: [{_sql, params}]} =
+        build("MATCH (a:Person:Employee) RETURN a")
+
+      assert "Person" in params
+      assert "Employee" in params
+    end
   end
 
   # ── SELECT — cross join ───────────────────────────────────────────────────────
@@ -112,11 +160,15 @@ defmodule OpenGQL.QueryBuilderTest do
   # ── SELECT — fallback :all ────────────────────────────────────────────────────
 
   describe "build/1 - :all fallback" do
-    test "MATCH with no nodes produces an :all Statement" do
-      # The fallback cond branch covers the _ case in build_select/2.
-      # We can trigger it via parse_and_build with a bare MATCH RETURN *
+    test "MATCH with single unlabeled node produces :select statement" do
       stmt = OpenGQL.parse_and_build("MATCH (n) RETURN n")
       assert %Statement{type: :select} = stmt
+    end
+
+    test "unsupported pattern (3 nodes) raises ArgumentError" do
+      assert_raise ArgumentError, ~r/unsupported MATCH pattern/, fn ->
+        build("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:LIKES]->(c:Item) RETURN a, b, c")
+      end
     end
   end
 
@@ -186,6 +238,25 @@ defmodule OpenGQL.QueryBuilderTest do
         build("CREATE (a:Person {name: \"A\"})-[:KNOWS]->()")
       end
     end
+
+    test "CREATE with only anonymous nodes raises ArgumentError" do
+      assert_raise ArgumentError, ~r/no named nodes/, fn ->
+        build("CREATE (:Person)")
+      end
+    end
+
+    test "compound MATCH + CREATE raises ArgumentError" do
+      assert_raise ArgumentError, ~r/not yet supported/, fn ->
+        build(~S[MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[:FRIENDS]->(b)])
+      end
+    end
+
+    test "multi-label node key includes all labels" do
+      %Statement{operations: [{_sql, [key | _]}]} =
+        build("CREATE (a:Person:Employee {name: \"Alice\"})")
+
+      assert key == ~s(["Alice","Person","Employee"])
+    end
   end
 
   # ── UPDATE (MATCH + SET) ──────────────────────────────────────────────────────
@@ -230,6 +301,12 @@ defmodule OpenGQL.QueryBuilderTest do
       %Statement{operations: [{sql, _params}]} = build("SET a.x = 1")
       # Without a MATCH the fallback produces an update with no label condition
       refute sql =~ "WHERE"
+    end
+
+    test "SET targeting wrong variable raises ArgumentError" do
+      assert_raise ArgumentError, ~r/targets variable/, fn ->
+        build(~S[MATCH (a:Person) SET b.name = "Bob"])
+      end
     end
   end
 
@@ -365,6 +442,24 @@ defmodule OpenGQL.QueryBuilderTest do
       stmt = %Statement{type: :update, operations: [{"UPDATE nodes SET x = 1", []}]}
       ok_fn = fn _sql, _params -> {:ok, :updated} end
       assert {:ok, :updated} = OpenGQL.execute(stmt, ok_fn)
+    end
+
+    test "INSERT results are returned in operation order" do
+      stmt = %Statement{
+        type: :insert,
+        operations: [{"INSERT 1", []}, {"INSERT 2", []}, {"INSERT 3", []}]
+      }
+
+      call_order = :counters.new(1, [])
+
+      ordered_fn = fn sql, _params ->
+        :counters.add(call_order, 1, 1)
+        {:ok, {sql, :counters.get(call_order, 1)}}
+      end
+
+      assert {:ok, results} = OpenGQL.execute(stmt, ordered_fn)
+      # Results must match operation order, not reversed
+      assert [{"INSERT 1", 1}, {"INSERT 2", 2}, {"INSERT 3", 3}] = results
     end
 
     test "parse_and_build raises on partial parse (trailing garbage)" do

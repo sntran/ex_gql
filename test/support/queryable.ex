@@ -40,14 +40,21 @@ defimpl Ecto.Queryable, for: OpenGQL.Statement do
     q = from(n in "nodes")
 
     q =
-      Enum.reduce(labels, q, fn label, acc ->
-        where(acc, [n], fragment("json_extract(?, '$[1]') = ?", n.key, ^label))
+      labels
+      |> Enum.with_index(1)
+      |> Enum.reduce(q, fn {label, idx}, acc ->
+        where(acc, [n], fragment("json_extract(?, ?) = ?", n.key, ^"$[#{idx}]", ^label))
       end)
 
     q =
       Enum.reduce(props, q, fn {key, val}, acc ->
         path = "$.#{key}"
-        where(acc, [n], fragment("json_extract(?, ?) = ?", n.value, ^path, ^val))
+
+        if is_nil(val) do
+          where(acc, [n], fragment("json_type(?, ?) = 'null'", n.value, ^path))
+        else
+          where(acc, [n], fragment("json_extract(?, ?) = ?", n.value, ^path, ^val))
+        end
       end)
 
     select(q, [n], %{"key" => n.key, "value" => n.value})
@@ -86,30 +93,45 @@ defimpl Ecto.Queryable, for: OpenGQL.Statement do
       end
 
     q =
-      Enum.reduce(n1_info.labels, q, fn label, acc ->
-        where(acc, [n1: n1], fragment("json_extract(?, '$[1]') = ?", n1.key, ^label))
+      n1_info.labels
+      |> Enum.with_index(1)
+      |> Enum.reduce(q, fn {label, idx}, acc ->
+        where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.key, ^"$[#{idx}]", ^label))
       end)
 
     q =
       Enum.reduce(n1_info.props, q, fn {key, val}, acc ->
         path = "$.#{key}"
-        where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.value, ^path, ^val))
+
+        if is_nil(val) do
+          where(acc, [n1: n1], fragment("json_type(?, ?) = 'null'", n1.value, ^path))
+        else
+          where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.value, ^path, ^val))
+        end
       end)
 
     q =
-      Enum.reduce(edge_types, q, fn type, acc ->
-        where(acc, [e: e], e.rel == ^type)
-      end)
+      case edge_types do
+        [] -> q
+        _ -> where(q, [e: e], e.rel in ^edge_types)
+      end
 
     q =
-      Enum.reduce(n2_info.labels, q, fn label, acc ->
-        where(acc, [n2: n2], fragment("json_extract(?, '$[1]') = ?", n2.key, ^label))
+      n2_info.labels
+      |> Enum.with_index(1)
+      |> Enum.reduce(q, fn {label, idx}, acc ->
+        where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.key, ^"$[#{idx}]", ^label))
       end)
 
     q =
       Enum.reduce(n2_info.props, q, fn {key, val}, acc ->
         path = "$.#{key}"
-        where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.value, ^path, ^val))
+
+        if is_nil(val) do
+          where(acc, [n2: n2], fragment("json_type(?, ?) = 'null'", n2.value, ^path))
+        else
+          where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.value, ^path, ^val))
+        end
       end)
 
     select(q, [n1: n1, n2: n2], %{
@@ -134,25 +156,39 @@ defimpl Ecto.Queryable, for: OpenGQL.Statement do
       )
 
     q =
-      Enum.reduce(n1_info.labels, q, fn label, acc ->
-        where(acc, [n1: n1], fragment("json_extract(?, '$[1]') = ?", n1.key, ^label))
+      n1_info.labels
+      |> Enum.with_index(1)
+      |> Enum.reduce(q, fn {label, idx}, acc ->
+        where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.key, ^"$[#{idx}]", ^label))
       end)
 
     q =
       Enum.reduce(n1_info.props, q, fn {key, val}, acc ->
         path = "$.#{key}"
-        where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.value, ^path, ^val))
+
+        if is_nil(val) do
+          where(acc, [n1: n1], fragment("json_type(?, ?) = 'null'", n1.value, ^path))
+        else
+          where(acc, [n1: n1], fragment("json_extract(?, ?) = ?", n1.value, ^path, ^val))
+        end
       end)
 
     q =
-      Enum.reduce(n2_info.labels, q, fn label, acc ->
-        where(acc, [n2: n2], fragment("json_extract(?, '$[1]') = ?", n2.key, ^label))
+      n2_info.labels
+      |> Enum.with_index(1)
+      |> Enum.reduce(q, fn {label, idx}, acc ->
+        where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.key, ^"$[#{idx}]", ^label))
       end)
 
     q =
       Enum.reduce(n2_info.props, q, fn {key, val}, acc ->
         path = "$.#{key}"
-        where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.value, ^path, ^val))
+
+        if is_nil(val) do
+          where(acc, [n2: n2], fragment("json_type(?, ?) = 'null'", n2.value, ^path))
+        else
+          where(acc, [n2: n2], fragment("json_extract(?, ?) = ?", n2.value, ^path, ^val))
+        end
       end)
 
     select(q, [n1: n1, n2: n2], %{

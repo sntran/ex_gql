@@ -47,9 +47,9 @@ defmodule OpenGQL do
   ### Via `Repo.all/2` (Ecto.Queryable)
 
   SELECT statements implement the `Ecto.Queryable` protocol when the
-  `test/support/queryable.ex` protocol implementation is compiled (automatically
-  available in `:test` / `:dev` environments).  This lets you pass a statement
-  directly to any Ecto repo operation:
+  `test/support/queryable.ex` protocol implementation is compiled (available
+  in `:test` and `:dev` environments — see `mix.exs` `elixirc_paths`).  This
+  lets you pass a statement directly to any Ecto repo operation:
 
       results = Repo.all(~G"MATCH (a:Person) RETURN a")
       # returns the same string-keyed maps as execute/2
@@ -193,12 +193,15 @@ defmodule OpenGQL do
 
   def execute(%Statement{type: :insert, operations: ops}, query_fn)
       when is_function(query_fn, 2) do
-    Enum.reduce_while(ops, {:ok, []}, fn {sql, params}, {:ok, acc} ->
-      case query_fn.(sql, params) do
-        {:ok, result} -> {:cont, {:ok, acc ++ [result]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+    case Enum.reduce_while(ops, {:ok, []}, fn {sql, params}, {:ok, acc} ->
+           case query_fn.(sql, params) do
+             {:ok, result} -> {:cont, {:ok, [result | acc]}}
+             {:error, _} = err -> {:halt, err}
+           end
+         end) do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
+      {:error, _} = err -> err
+    end
   end
 
   def execute(%Statement{type: type, operations: [{sql, params}]}, query_fn)
