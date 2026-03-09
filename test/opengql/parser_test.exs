@@ -64,6 +64,47 @@ defmodule OpenGQL.ParserTest do
       props = Keyword.get(attrs, :props)
       assert props != nil
     end
+
+    test "node with boolean=false property" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person {active: false}) RETURN a")
+
+      match = Keyword.get(clauses, :match)
+      assert [{:path, [{:node, attrs}]}] = match
+      props = Keyword.get(attrs, :props)
+      # props is a tagged list like [:props, "active", {:boolean, false}]
+      assert props != nil
+      assert {:boolean, false} in props
+    end
+
+    test "node with null property" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person {ref: null}) RETURN a")
+
+      match = Keyword.get(clauses, :match)
+      assert [{:path, [{:node, attrs}]}] = match
+      props = Keyword.get(attrs, :props)
+      assert props != nil
+      assert {:null, nil} in props
+    end
+
+    test "node with multiple properties" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person {name: "Alice", age: 30}) RETURN a])
+
+      match = Keyword.get(clauses, :match)
+      assert [{:path, [{:node, attrs}]}] = match
+      props = Keyword.get(attrs, :props)
+      assert props != nil
+    end
+
+    test "node with negative integer property" do
+      assert {:ok, _, "", _, _, _} = Parser.parse("MATCH (a:Data {temp: -5}) RETURN a")
+    end
+
+    test "node with positive-sign integer property" do
+      assert {:ok, _, "", _, _, _} = Parser.parse("MATCH (a:Data {temp: +5}) RETURN a")
+    end
   end
 
   describe "parse/1 - path patterns" do
@@ -86,6 +127,15 @@ defmodule OpenGQL.ParserTest do
       assert [{:node, _}, {:edge_left, _}, {:node, _}] = path_elements
     end
 
+    test "undirected edge" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person)-[:KNOWS]-(b:Person) RETURN a, b")
+
+      match = Keyword.get(clauses, :match)
+      assert [{:path, path_elements}] = match
+      assert [{:node, _}, {:edge_undirected, _}, {:node, _}] = path_elements
+    end
+
     test "edge with type" do
       assert {:ok, [{:statement, clauses}], "", _, _, _} =
                Parser.parse("MATCH (a)-[:KNOWS]->(b) RETURN a, b")
@@ -93,6 +143,24 @@ defmodule OpenGQL.ParserTest do
       match = Keyword.get(clauses, :match)
       assert [{:path, [_, {:edge_right, edge_attrs}, _]}] = match
       assert Keyword.get(edge_attrs, :types) == ["KNOWS"]
+    end
+
+    test "edge without type (typeless)" do
+      assert {:ok, _, "", _, _, _} = Parser.parse("MATCH (a)-[]->(b) RETURN a, b")
+    end
+
+    test "edge with multiple types (pipe-separated)" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a)-[:KNOWS|LIKES]->(b) RETURN a, b")
+
+      match = Keyword.get(clauses, :match)
+      assert [{:path, [_, {:edge_right, edge_attrs}, _]}] = match
+      assert Keyword.get(edge_attrs, :types) == ["KNOWS", "LIKES"]
+    end
+
+    test "chained path (three nodes)" do
+      assert {:ok, _, "", _, _, _} =
+               Parser.parse("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:LIKES]->(c:Item) RETURN a, b, c")
     end
   end
 
@@ -186,6 +254,22 @@ defmodule OpenGQL.ParserTest do
 
       set = Keyword.get(clauses, :set)
       assert [{:assignment, ["a", "age", {:integer, 42}]}] = set
+    end
+
+    test "null assignment" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) SET a.ref = null RETURN a")
+
+      set = Keyword.get(clauses, :set)
+      assert [{:assignment, ["a", "ref", {:null, nil}]}] = set
+    end
+
+    test "boolean false assignment" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) SET a.active = false RETURN a")
+
+      set = Keyword.get(clauses, :set)
+      assert [{:assignment, ["a", "active", {:boolean, false}]}] = set
     end
   end
 

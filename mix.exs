@@ -8,6 +8,14 @@ defmodule OpenGQL.MixProject do
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
+      test_coverage: [tool: ExCoveralls],
+      preferred_cli_env: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.post": :test,
+        "coveralls.html": :test,
+        "coveralls.github": :test
+      ],
       deps: deps()
     ]
   end
@@ -43,7 +51,12 @@ defmodule OpenGQL.MixProject do
       {:telemetry, git: "https://github.com/beam-telemetry/telemetry.git", tag: "v1.3.0",
        only: [:dev, :test], override: true},
       {:stream_data, git: "https://github.com/whatyouhide/stream_data.git", tag: "v1.1.2",
-       only: [:dev, :test]}
+       only: [:dev, :test]},
+      {:excoveralls,
+       git: "https://github.com/parroty/excoveralls.git", tag: "v0.18.3",
+       only: :test},
+      {:jason, git: "https://github.com/michalmuskala/jason.git", tag: "v1.4.4",
+       only: :test, override: true}
     ]
   end
 end
