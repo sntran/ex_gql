@@ -73,9 +73,7 @@ defmodule OpenGQL do
       {:ok, rows} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
       # --- CREATE ---
-      stmt = ~G"""
-      CREATE (a:Person {name: "Alice"})-[:KNOWS]->(b:Person {name: "Bob"})
-      """
+      stmt = ~G'CREATE (a:Person {name: "Alice"})-[:KNOWS]->(b:Person {name: "Bob"})'
       {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
       # --- MATCH + SET ---
