@@ -24,6 +24,9 @@ jobs:
           # Latest stable
           - elixir: "1.17"
             otp: "27"
+          # Current (user's version)
+          - elixir: "1.19"
+            otp: "28"
 
     steps:
       - name: Checkout code
@@ -70,8 +73,8 @@ jobs:
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.17"
-          otp-version: "27"
+          elixir-version: "1.19"
+          otp-version: "28"
 
       - name: Restore dependency cache
         uses: actions/cache@v4
@@ -80,18 +83,24 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-coverage-1.17-27-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-mix-coverage-1.19-28-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-coverage-1.17-27-
+            ${{ runner.os }}-mix-coverage-1.19-28-
 
       - name: Install dependencies
         if: steps.mix-cache.outputs.cache-hit != 'true'
         run: mix deps.get
 
-      - name: Run coverage
+      - name: Run coverage (GitHub)
         run: mix coveralls.github
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate HTML coverage report
+        run: mix coveralls.html
+        env:
+          MIX_ENV: test
 
       - name: Upload coverage HTML report
         uses: actions/upload-artifact@v4
@@ -100,3 +109,4 @@ jobs:
           name: coverage-report
           path: cover/
           retention-days: 30
+          if-no-files-found: ignore

@@ -5,7 +5,7 @@ defimpl Ecto.Queryable, for: OpenGQL.Statement do
   Allows passing a SELECT-type `%OpenGQL.Statement{}` directly to Ecto repo
   operations such as `Repo.all/2`:
 
-      stmt = ~G"MATCH (a:Person {name: \\"Alice\\"}) RETURN a"
+      stmt = ~G[MATCH (a:Person {name: "Alice"}) RETURN a]
       results = Repo.all(stmt)
       # results => [%{"key" => "...", "value" => "..."}]
 

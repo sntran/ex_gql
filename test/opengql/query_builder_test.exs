@@ -247,7 +247,9 @@ defmodule OpenGQL.QueryBuilderTest do
 
     test "compound MATCH + CREATE raises ArgumentError" do
       assert_raise ArgumentError, ~r/not yet supported/, fn ->
-        build(~S[MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[:FRIENDS]->(b)])
+        build(~S"""
+        MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[:FRIENDS]->(b)
+        """)
       end
     end
 

@@ -135,7 +135,7 @@ defmodule OpenGQL.IntegrationTest do
 
   describe "CREATE" do
     test "creates a single node" do
-      stmt = ~G"CREATE (a:Person {name: \"Alice\"})"
+      stmt = ~G[CREATE (a:Person {name: "Alice"})]
       assert %OpenGQL.Statement{type: :insert} = stmt
 
       {:ok, _} = run(stmt)
@@ -146,7 +146,7 @@ defmodule OpenGQL.IntegrationTest do
     end
 
     test "creates a node with the correct value JSON" do
-      {:ok, _} = run(~G"CREATE (a:Person {name: \"Alice\"})")
+      {:ok, _} = run(~G[CREATE (a:Person {name: "Alice"})])
 
       [node] = Repo.all(from n in Node, select: n)
       assert node.value =~ "Alice"

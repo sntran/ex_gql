@@ -38,9 +38,9 @@ defmodule OpenGQL.Statement do
 
   Use `OpenGQL.execute/2` to run a statement against any SQLite connection:
 
-      stmt = ~G"MATCH (a:Person {name: \\"Alice\\"}) RETURN a"
+      stmt = ~G[MATCH (a:Person {name: "Alice"}) RETURN a]
       {:ok, rows} = OpenGQL.execute(stmt, &MyRepo.query/2)
-      # rows => [%{"key" => "[\\"alice\\",\\"Person\\"]", "value" => "{\\"name\\":\\"Alice\\"}"}]
+      # rows => [%{"key" => "[\"alice\",\"Person\"]", "value" => "{\"name\":\"Alice\"}"}]
 
   When the optional `Ecto.Queryable` protocol is implemented (e.g. via
   `test/support/queryable.ex`), you can also pass a SELECT statement directly

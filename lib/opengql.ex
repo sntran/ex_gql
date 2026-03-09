@@ -32,7 +32,7 @@ defmodule OpenGQL do
 
       import OpenGQL
 
-      stmt = ~G"MATCH (a:Person {name: \"Alice\"}) RETURN a"
+      stmt = ~G[MATCH (a:Person {name: "Alice"}) RETURN a]
       #=> %OpenGQL.Statement{type: :select, operations: [{"SELECT ...", [...]}]}
 
   ## Executing statements
@@ -73,7 +73,9 @@ defmodule OpenGQL do
       {:ok, rows} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
       # --- CREATE ---
-      stmt = ~G"CREATE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})"
+      stmt = ~G"""
+      CREATE (a:Person {name: "Alice"})-[:KNOWS]->(b:Person {name: "Bob"})
+      """
       {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
       # --- MATCH + SET ---
@@ -175,7 +177,7 @@ defmodule OpenGQL do
       Enum.each(rows, fn row -> IO.inspect(row["key"]) end)
 
       # CREATE
-      stmt = ~G"CREATE (a:Person {name: \"Alice\"})"
+      stmt = ~G[CREATE (a:Person {name: "Alice"})]
       {:ok, _} = OpenGQL.execute(stmt, &MyRepo.query/2)
 
       # DELETE

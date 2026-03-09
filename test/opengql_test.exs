@@ -86,12 +86,12 @@ defmodule OpenGQLTest do
 
   describe "~G sigil — CREATE" do
     test "returns a Statement with type :insert" do
-      stmt = ~G"CREATE (a:Person {name: \"Alice\"})"
+      stmt = ~G[CREATE (a:Person {name: "Alice"})]
       assert %OpenGQL.Statement{type: :insert} = stmt
     end
 
     test "single-node CREATE has one INSERT operation" do
-      %OpenGQL.Statement{operations: ops} = ~G"CREATE (a:Person {name: \"Alice\"})"
+      %OpenGQL.Statement{operations: ops} = ~G[CREATE (a:Person {name: "Alice"})]
       assert length(ops) == 1
       {sql, _} = hd(ops)
       assert sql =~ "INSERT INTO nodes"
@@ -111,14 +111,14 @@ defmodule OpenGQLTest do
 
     test "CREATE builds correct node key JSON" do
       %OpenGQL.Statement{operations: [{_sql, params} | _]} =
-        ~G"CREATE (a:Person {name: \"Alice\"})"
+        ~G[CREATE (a:Person {name: "Alice"})]
 
       assert ~s(["Alice","Person"]) in params
     end
 
     test "CREATE encodes node value as JSON" do
       %OpenGQL.Statement{operations: [{_sql, [_key, value]} | _]} =
-        ~G"CREATE (a:Person {name: \"Alice\"})"
+        ~G[CREATE (a:Person {name: "Alice"})]
 
       assert value =~ "Alice"
     end
