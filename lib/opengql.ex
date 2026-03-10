@@ -59,6 +59,10 @@ defmodule OpenGQL do
   | Clause(s)               | Statement type  | Repo usage                    |
   |-------------------------|-----------------|-------------------------------|
   | `MATCH … RETURN`        | `:select`       | `execute/2` → list of row maps|
+  | `WHERE` / `FILTER`      | `:select`       | SELECT predicate modifiers    |
+  | `ORDER BY`              | `:select`       | SELECT ordering modifier      |
+  | `LIMIT` / `OFFSET` / `SKIP` | `:select`   | SELECT pagination modifiers   |
+  | `FINISH`                | `:select`       | terminal marker (no-op)       |
   | `CREATE …`              | `:insert`       | `execute/2` → `{:ok, results}`|
   | `MATCH … SET`           | `:update`       | `execute/2` → `{:ok, result}` |
   | `MATCH … DELETE`        | `:delete`       | `execute/2` → `{:ok, result}` |

@@ -299,6 +299,240 @@ defmodule OpenGQL.ParserTest do
     end
   end
 
+  describe "parse/1 - additional query clauses" do
+    test "WHERE with comparison condition" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.age >= 21 RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE with OR condition" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.age >= 21 OR a.active = true RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+      assert Enum.any?(where_clause, fn
+               {:logical, _} -> true
+               _ -> false
+             end)
+    end
+
+    test "FILTER with string equality" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) FILTER a.name = "Alice" RETURN a])
+
+      filter_clause = Keyword.get(clauses, :filter)
+      assert is_list(filter_clause)
+      assert filter_clause != []
+    end
+
+    test "ORDER BY with explicit directions" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) RETURN a ORDER BY a.age DESC, a.name ASC")
+
+      order_clause = Keyword.get(clauses, :order_by)
+      assert is_list(order_clause)
+      assert length(order_clause) == 2
+    end
+
+    test "LIMIT parses integer" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) RETURN a LIMIT 10")
+
+      assert Keyword.get(clauses, :limit) == [10]
+    end
+
+    test "OFFSET parses integer" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) RETURN a OFFSET 5")
+
+      assert Keyword.get(clauses, :offset) == [5]
+    end
+
+    test "SKIP parses integer" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) RETURN a SKIP 3")
+
+      assert Keyword.get(clauses, :skip) == [3]
+    end
+
+    test "FINISH parses as terminal clause" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) RETURN a FINISH")
+
+      assert Keyword.has_key?(clauses, :finish)
+    end
+
+    test "WHERE supports IS NULL" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.ref IS NULL RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports IS NOT NULL" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.ref IS NOT NULL RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports IS TRUE" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.active IS TRUE RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports IS NOT FALSE" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.active IS NOT FALSE RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports IS FALSE" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.active IS FALSE RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports IN list predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S|MATCH (a:Person) WHERE a.name IN ["Alice", "Bob"] RETURN a|)
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports CONTAINS predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) WHERE a.name CONTAINS "li" RETURN a])
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports STARTS WITH predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) WHERE a.name STARTS WITH "Al" RETURN a])
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports ENDS WITH predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) WHERE a.name ENDS WITH "ce" RETURN a])
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports NOT predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) WHERE NOT a.active = true RETURN a])
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+      assert Enum.any?(where_clause, fn
+               {:unary, _} -> true
+               _ -> false
+             end)
+    end
+
+    test "WHERE supports grouped predicates with parentheses" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(
+                 ~S[MATCH (a:Person) WHERE (a.age >= 21 OR a.name = "Bob") AND a.active = true RETURN a]
+               )
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+      assert Enum.any?(where_clause, fn
+               {:group, _} -> true
+               _ -> false
+             end)
+    end
+
+    test "WHERE supports XOR operator" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S[MATCH (a:Person) WHERE a.active = true XOR a.staff = true RETURN a])
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+      assert Enum.any?(where_clause, fn
+               {:logical, [:xor]} -> true
+               _ -> false
+             end)
+    end
+
+    test "WHERE supports nested parenthesized expressions" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(
+                 ~S[MATCH (a:Person) WHERE ((a.age >= 21 OR a.name = "Bob") AND (NOT (a.staff = 1 XOR a.active = 1))) RETURN a]
+               )
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports unary NOT stacking" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE NOT NOT a.active = 1 RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+      assert Enum.count(where_clause, fn
+               {:unary, _} -> true
+               _ -> false
+             end) >= 1
+    end
+
+    test "WHERE supports BETWEEN predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse("MATCH (a:Person) WHERE a.age BETWEEN 18 AND 30 RETURN a")
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+
+    test "WHERE supports NOT IN predicate" do
+      assert {:ok, [{:statement, clauses}], "", _, _, _} =
+               Parser.parse(~S|MATCH (a:Person) WHERE a.name NOT IN ["Alice", "Bob"] RETURN a|)
+
+      where_clause = Keyword.get(clauses, :where)
+      assert is_list(where_clause)
+      assert where_clause != []
+    end
+  end
+
   describe "property-based tests" do
     property "any valid GQL identifier is accepted as a variable" do
       check all(
@@ -336,6 +570,101 @@ defmodule OpenGQL.ParserTest do
         match = Keyword.get(clauses, :match)
         assert [{:path, [_, {:edge_right, edge_attrs}, _]}] = match
         assert Keyword.get(edge_attrs, :types) == [rel_type]
+      end
+    end
+
+    property "WHERE clauses with valid identifiers and integer values parse" do
+      check all(
+              var <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              prop <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              value <- integer(0..10_000)
+            ) do
+        gql = "MATCH (#{var}:Person) WHERE #{var}.#{prop} = #{value} RETURN #{var}"
+        assert {:ok, _, "", _, _, _} = Parser.parse(gql)
+      end
+    end
+
+    property "LIMIT/OFFSET values parse for non-negative integers" do
+      check all(limit <- integer(0..1_000), offset <- integer(0..1_000)) do
+        gql = "MATCH (a:Person) RETURN a LIMIT #{limit} OFFSET #{offset}"
+        assert {:ok, _, "", _, _, _} = Parser.parse(gql)
+      end
+    end
+
+    property "OR predicates parse with valid identifiers and integer values" do
+      check all(
+              var <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              prop1 <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              prop2 <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              v1 <- integer(0..10_000),
+              v2 <- integer(0..10_000)
+            ) do
+        gql =
+          "MATCH (#{var}:Person) WHERE #{var}.#{prop1} = #{v1} OR #{var}.#{prop2} = #{v2} RETURN #{var}"
+
+        assert {:ok, _, "", _, _, _} = Parser.parse(gql)
+      end
+    end
+
+    property "grouped boolean predicates parse with valid identifiers" do
+      check all(
+              var <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              p1 <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              p2 <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              p3 <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              v1 <- integer(0..1_000),
+              v2 <- integer(0..1_000),
+              v3 <- integer(0..1_000)
+            ) do
+        gql =
+          "MATCH (#{var}:Person) WHERE (#{var}.#{p1} = #{v1} OR #{var}.#{p2} = #{v2}) AND NOT #{var}.#{p3} = #{v3} RETURN #{var}"
+
+        assert {:ok, _, "", _, _, _} = Parser.parse(gql)
+      end
+    end
+
+    property "BETWEEN predicates parse with generated integer bounds" do
+      check all(
+              var <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              prop <-
+                string(:alphanumeric)
+                |> filter(&(String.length(&1) > 0))
+                |> filter(&String.match?(&1, ~r/^[a-zA-Z_][a-zA-Z0-9_]*$/)),
+              low <- integer(0..100),
+              high <- integer(101..200)
+            ) do
+        gql = "MATCH (#{var}:Person) WHERE #{var}.#{prop} BETWEEN #{low} AND #{high} RETURN #{var}"
+        assert {:ok, _, "", _, _, _} = Parser.parse(gql)
       end
     end
   end

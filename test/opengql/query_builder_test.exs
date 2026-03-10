@@ -172,6 +172,319 @@ defmodule OpenGQL.QueryBuilderTest do
     end
   end
 
+  # ── SELECT — additional query clauses ───────────────────────────────────────
+
+  describe "build/1 - WHERE/FILTER/ORDER/PAGINATION/FINISH" do
+    test "WHERE adds SQL predicates and bound params" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.age >= 21 RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.age') >= ?"
+      assert 21 in params
+    end
+
+    test "FILTER behaves like WHERE" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person) FILTER a.name = "Alice" RETURN a])
+
+      assert sql =~ "json_extract(n.value, '$.name') = ?"
+      assert "Alice" in params
+    end
+
+    test "ORDER BY appends sort expressions" do
+      %Statement{operations: [{sql, _params}]} =
+        build("MATCH (a:Person) RETURN a ORDER BY a.age DESC, a.name ASC")
+
+      assert sql =~ "ORDER BY"
+      assert sql =~ "$.age"
+      assert sql =~ "DESC"
+      assert sql =~ "$.name"
+      assert sql =~ "ASC"
+    end
+
+    test "LIMIT appends parameterized limit" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) RETURN a LIMIT 5")
+
+      assert sql =~ "LIMIT ?"
+      assert List.last(params) == 5
+    end
+
+    test "OFFSET appends parameterized offset" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) RETURN a LIMIT 10 OFFSET 4")
+
+      assert sql =~ "LIMIT ?"
+      assert sql =~ "OFFSET ?"
+      assert Enum.take(params, -2) == [10, 4]
+    end
+
+    test "SKIP maps to SQL OFFSET" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) RETURN a LIMIT 10 SKIP 7")
+
+      assert sql =~ "OFFSET ?"
+      assert Enum.take(params, -2) == [10, 7]
+    end
+
+    test "FINISH does not change SQL semantics" do
+      %Statement{operations: [{sql1, params1}]} = build("MATCH (a:Person) RETURN a")
+      %Statement{operations: [{sql2, params2}]} = build("MATCH (a:Person) RETURN a FINISH")
+
+      assert sql1 == sql2
+      assert params1 == params2
+    end
+
+    test "OR predicate is rendered in SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.age >= 21 OR a.active = true RETURN a")
+
+      assert sql =~ " OR "
+      assert 21 in params
+      assert true in params
+    end
+
+    test "IS NULL predicate renders without bound nil param" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.ref IS NULL RETURN a")
+
+      assert sql =~ "IS NULL"
+      refute nil in params
+    end
+
+    test "IS NOT NULL predicate renders without bound nil param" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.ref IS NOT NULL RETURN a")
+
+      assert sql =~ "IS NOT NULL"
+      refute nil in params
+    end
+
+    test "IS TRUE predicate renders boolean-state SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.active IS TRUE RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.active') = 1"
+      assert params == ["Person"]
+    end
+
+    test "IS NOT TRUE predicate renders null-or-false SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.active IS NOT TRUE RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.active') IS NULL"
+      assert sql =~ "json_extract(n.value, '$.active') = 0"
+      assert params == ["Person"]
+    end
+
+    test "IS FALSE predicate renders boolean-state SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.active IS FALSE RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.active') = 0"
+      assert params == ["Person"]
+    end
+
+    test "IS NOT FALSE predicate renders null-or-true SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.active IS NOT FALSE RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.active') IS NULL"
+      assert sql =~ "json_extract(n.value, '$.active') = 1"
+      assert params == ["Person"]
+    end
+
+    test "IN predicate renders placeholder list" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S|MATCH (a:Person) WHERE a.name IN ["Alice", "Bob"] RETURN a|)
+
+      assert sql =~ " IN ("
+      assert "Alice" in params
+      assert "Bob" in params
+    end
+
+    test "CONTAINS predicate renders LIKE with wrapped wildcard" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person) WHERE a.name CONTAINS "li" RETURN a])
+
+      assert sql =~ "LIKE ?"
+      assert "%li%" in params
+    end
+
+    test "STARTS WITH predicate renders LIKE suffix wildcard" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person) WHERE a.name STARTS WITH "Al" RETURN a])
+
+      assert sql =~ "LIKE ?"
+      assert "Al%" in params
+    end
+
+    test "ENDS WITH predicate renders LIKE prefix wildcard" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person) WHERE a.name ENDS WITH "ce" RETURN a])
+
+      assert sql =~ "LIKE ?"
+      assert "%ce" in params
+    end
+
+    test "NOT predicate wraps negated condition" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person) WHERE NOT a.active = true RETURN a])
+
+      assert sql =~ "NOT"
+      assert true in params
+    end
+
+    test "parenthesized predicates preserve grouping in SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build(
+          ~S[MATCH (a:Person) WHERE (a.age >= 21 OR a.name = "Bob") AND a.active = true RETURN a]
+        )
+
+      assert sql =~ "("
+      assert sql =~ ")"
+      assert sql =~ " OR "
+      assert sql =~ " AND "
+      assert 21 in params
+      assert "Bob" in params
+      assert true in params
+    end
+
+    test "XOR predicate translates to exclusive condition SQL" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S[MATCH (a:Person) WHERE a.active = true XOR a.staff = true RETURN a])
+
+      assert sql =~ "NOT"
+      assert sql =~ " OR "
+      assert sql =~ " AND "
+      assert length(Enum.filter(params, &(&1 == true))) == 4
+    end
+
+    test "ORDER BY unknown variable raises ArgumentError" do
+      assert_raise ArgumentError, ~r/ORDER BY references unknown variable/, fn ->
+        build("MATCH (a:Person) RETURN a ORDER BY b.name ASC")
+      end
+    end
+
+    test "WHERE unknown variable raises ArgumentError" do
+      assert_raise ArgumentError, ~r/unknown variable/, fn ->
+        build("MATCH (a:Person) WHERE b.age = 10 RETURN a")
+      end
+    end
+
+    test "IN with empty list compiles to always-false SQL predicate" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.name IN [] RETURN a")
+
+      assert sql =~ "1 = 0"
+      assert params == ["Person"]
+    end
+
+    test "nested grouped expression translates preserving precedence" do
+      %Statement{operations: [{sql, params}]} =
+        build(
+          ~S|MATCH (a:Person) WHERE ((a.age >= 21 OR a.name = "Bob") AND (NOT (a.staff = 1 XOR a.active = 1))) RETURN a|
+        )
+
+      assert sql =~ "("
+      assert sql =~ ")"
+      assert sql =~ "NOT"
+      assert sql =~ "XOR" or sql =~ " OR "
+      assert 21 in params
+      assert "Bob" in params
+    end
+
+    test "double NOT wraps predicate twice" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE NOT NOT a.active = 1 RETURN a")
+
+      assert sql =~ "NOT"
+      assert 1 in params
+    end
+
+    test "BETWEEN translates to BETWEEN with two bound params" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.age BETWEEN 18 AND 30 RETURN a")
+
+      assert sql =~ "BETWEEN ? AND ?"
+      assert Enum.take(params, -2) == [18, 30]
+    end
+
+    test "NOT IN translates to NOT IN with placeholder list" do
+      %Statement{operations: [{sql, params}]} =
+        build(~S|MATCH (a:Person) WHERE a.name NOT IN ["Alice", "Bob"] RETURN a|)
+
+      assert sql =~ "NOT IN ("
+      assert "Alice" in params
+      assert "Bob" in params
+    end
+
+    test "NOT BETWEEN translates to NOT BETWEEN with bound params" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.age NOT BETWEEN 18 AND 30 RETURN a")
+
+      assert sql =~ "NOT BETWEEN ? AND ?"
+      assert Enum.take(params, -2) == [18, 30]
+    end
+
+    test "NOT IN empty list compiles to always-true SQL predicate" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.name NOT IN [] RETURN a")
+
+      assert sql =~ "1 = 1"
+      assert params == ["Person"]
+    end
+
+    test "WHERE and FILTER predicates are merged with AND" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.age >= 18 FILTER a.active = 1 RETURN a")
+
+      assert sql =~ "age"
+      assert sql =~ "active"
+      assert sql =~ " AND "
+      assert 18 in params
+      assert 1 in params
+    end
+
+    test "invalid predicate token sequence raises ArgumentError" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"]]}]}]},
+             {:where, [{:logical, [:and]}, {:condition_cmp, [{:property, ["a", "age"]}, :eq, {:integer, 1}]}]},
+             {:return, ["a"]}
+           ]}
+        ]
+
+      assert_raise ArgumentError, ~r/invalid predicate expression/, fn ->
+        QueryBuilder.build(ast)
+      end
+    end
+
+    test "predicate with malformed op chain raises token sequence error" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"]]}]}]},
+             {:where,
+              [
+                {:condition_cmp, [{:property, ["a", "age"]}, :eq, {:integer, 1}]},
+                {:logical, [:and]},
+                {:logical, [:or]},
+                {:condition_cmp, [{:property, ["a", "age"]}, :lt, {:integer, 5}]}
+              ]},
+             {:return, ["a"]}
+           ]}
+        ]
+
+      assert_raise ArgumentError, ~r/invalid predicate token sequence/, fn ->
+        QueryBuilder.build(ast)
+      end
+    end
+  end
+
   # ── CREATE ────────────────────────────────────────────────────────────────────
 
   describe "build/1 - CREATE" do
@@ -468,6 +781,42 @@ defmodule OpenGQL.QueryBuilderTest do
       assert_raise ArgumentError, ~r/unexpected input/, fn ->
         OpenGQL.parse_and_build("MATCH (a:Person) RETURN a @@@@")
       end
+    end
+  end
+
+  describe "build/1 - branch-focused AST fallbacks" do
+    test "fallback build without MATCH returns :all select" do
+      ast = [{:statement, [{:return, ["*"]}]}]
+
+      stmt = QueryBuilder.build(ast)
+
+      assert %Statement{type: :select, ast_info: %{kind: :all}, operations: [{sql, []}]} = stmt
+      assert sql == "SELECT key, value FROM nodes"
+    end
+
+    test "malformed CREATE path skips non-node-leading edge sequence" do
+      ast =
+        [
+          {:statement,
+           [
+             {:create,
+              [
+                {:path,
+                 [
+                   {:edge_right, [types: ["KNOWS"]]},
+                   {:node, [var: ["a"], labels: ["Person"], props: [:props, "name", {:string, "A"}]]}
+                 ]}
+              ]}
+           ]}
+        ]
+
+      stmt = QueryBuilder.build(ast)
+      assert %Statement{type: :insert, operations: ops} = stmt
+
+      # No valid edge triple can be formed from edge-first sequence, so only node insert remains.
+      assert length(ops) == 1
+      {sql, _params} = hd(ops)
+      assert sql =~ "INSERT INTO nodes"
     end
   end
 end

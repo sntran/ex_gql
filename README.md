@@ -51,7 +51,7 @@ import OpenGQL
 
 # --- MATCH + RETURN ---
 # Returns %OpenGQL.Statement{type: :select}
-stmt = ~G"MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person) RETURN a, b"
+stmt = ~G"MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.age >= 21 RETURN a, b ORDER BY a.age DESC LIMIT 10 OFFSET 0"
 {:ok, rows} = OpenGQL.execute(stmt, &MyRepo.query/2)
 # rows => [%{"n1_key" => "[\"alice\",\"Person\"]", "n1_value" => "...",
 #             "n2_key" => "[\"bob\",\"Person\"]",  "n2_value" => "..."}]
@@ -104,6 +104,17 @@ results = Repo.all(~G"MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b")
 | Node with properties                      | `MATCH (a:Person {name: "Alice"}) RETURN a`              |
 | Right-directed edge                       | `MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b`     |
 | Left-directed edge                        | `MATCH (a:Person)<-[:KNOWS]-(b:Person) RETURN a, b`     |
+| WHERE predicate on properties             | `MATCH (a:Person) WHERE a.age >= 21 RETURN a`           |
+| FILTER predicate on properties            | `MATCH (a:Person) FILTER a.name = "Alice" RETURN a`    |
+| Boolean predicates (`AND`/`OR`/`XOR`/`NOT`) | `MATCH (a:Person) WHERE NOT a.active = 1 XOR a.staff = 1 RETURN a` |
+| Grouped predicate expressions             | `MATCH (a:Person) WHERE (a.age >= 21 OR a.name = "Bob") AND a.active = 1 RETURN a` |
+| Null predicates                           | `MATCH (a:Person) WHERE a.ref IS NULL RETURN a`         |
+| Boolean-state predicates                  | `MATCH (a:Person) WHERE a.active IS NOT TRUE RETURN a` |
+| Set/list predicates                       | `MATCH (a:Person) WHERE a.name IN ["Alice", "Bob"] RETURN a` |
+| Text predicates                           | `MATCH (a:Person) WHERE a.name CONTAINS "li" RETURN a` |
+| ORDER BY                                  | `MATCH (a:Person) RETURN a ORDER BY a.age DESC`         |
+| LIMIT / OFFSET / SKIP                     | `MATCH (a:Person) RETURN a LIMIT 10 OFFSET 20`          |
+| FINISH (terminal marker)                  | `MATCH (a:Person) RETURN a FINISH`                      |
 | Multiple comma-separated patterns         | `MATCH (a:Person), (b:Person) RETURN a, b`              |
 | Create node                               | `CREATE (a:Person {name: "Alice"})`                     |
 | Create nodes and edge                     | `CREATE (a:Person {name: "Alice"})-[:KNOWS]->(b:Person {name: "Bob"})` |
@@ -149,3 +160,9 @@ For Ecto repos pass `&MyRepo.query/2`.
 mix deps.get
 mix test
 ```
+
+## Compatibility Suites
+
+For public GQL/Cypher conformance inputs and adoption notes, see:
+
+- `docs/compatibility_suites.md`

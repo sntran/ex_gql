@@ -129,6 +129,248 @@ defmodule OpenGQL.IntegrationTest do
       assert length(rows) == 1
       assert hd(rows)["key"] == ~s(["alice","Person"])
     end
+
+    test "WHERE clause filters matched rows" do
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","age":30})})
+
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","age":19})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE a.age >= 21 RETURN a")
+      assert length(rows) == 1
+      assert hd(rows)["key"] == ~s(["alice","Person"])
+    end
+
+    test "FILTER clause works as a WHERE synonym" do
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","age":30})})
+
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","age":30})})
+
+      {:ok, rows} = run(~G[MATCH (a:Person) FILTER a.name = "Bob" RETURN a])
+      assert length(rows) == 1
+      assert hd(rows)["key"] == ~s(["bob","Person"])
+    end
+
+    test "ORDER BY with LIMIT and OFFSET returns deterministic slice" do
+      Enum.each([{"amy", 20}, {"bob", 30}, {"cara", 40}, {"dave", 50}], fn {name, age} ->
+        {:ok, _} =
+          Repo.insert(%Node{
+            key: ~s(["#{name}","Person"]),
+            value: ~s({"name":"#{name}","age":#{age}})
+          })
+      end)
+
+      {:ok, rows} =
+        run(~G"MATCH (a:Person) RETURN a ORDER BY a.age DESC LIMIT 2 OFFSET 1")
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["cara","Person"]), ~s(["bob","Person"])]
+    end
+
+    test "SKIP is treated as OFFSET" do
+      Enum.each([{"amy", 20}, {"bob", 30}, {"cara", 40}], fn {name, age} ->
+        {:ok, _} =
+          Repo.insert(%Node{
+            key: ~s(["#{name}","Person"]),
+            value: ~s({"name":"#{name}","age":#{age}})
+          })
+      end)
+
+      {:ok, rows} = run(~G"MATCH (a:Person) RETURN a ORDER BY a.age ASC LIMIT 1 SKIP 1")
+      assert Enum.map(rows, & &1["key"]) == [~s(["bob","Person"])]
+    end
+
+    test "FINISH does not change query results" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+
+      {:ok, rows_without_finish} = run(~G"MATCH (a:Person) RETURN a")
+      {:ok, rows_with_finish} = run(~G"MATCH (a:Person) RETURN a FINISH")
+
+      assert rows_without_finish == rows_with_finish
+    end
+
+    test "WHERE OR returns rows matching either predicate" do
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","age":30})})
+
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","age":19})})
+
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["carol","Person"]), value: ~s({"name":"Carol","age":18})})
+
+      {:ok, rows} =
+        run(~G|MATCH (a:Person) WHERE a.age >= 21 OR a.name = "Bob" RETURN a ORDER BY a.name ASC|)
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"]), ~s(["bob","Person"])]
+    end
+
+    test "IS NULL predicate matches rows with null property" do
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","ref":null})})
+
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE a.ref IS NULL RETURN a ORDER BY a.name ASC")
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"]), ~s(["bob","Person"])]
+    end
+
+    test "IS NOT NULL predicate matches rows with present property" do
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","ref":"x"})})
+
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE a.ref IS NOT NULL RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"])]
+    end
+
+    test "IS TRUE predicate matches truthy boolean state" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","active":0})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a3","Person"]), value: ~s({"name":"A3"})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE a.active IS TRUE RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["a1","Person"])]
+    end
+
+    test "IS NOT TRUE predicate matches false and null states" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","active":0})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a3","Person"]), value: ~s({"name":"A3"})})
+
+      {:ok, rows} =
+        run(~G|MATCH (a:Person) WHERE a.active IS NOT TRUE RETURN a ORDER BY a.name ASC|)
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["a2","Person"]), ~s(["a3","Person"])]
+    end
+
+    test "IS FALSE predicate matches false boolean state" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","active":0})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a3","Person"]), value: ~s({"name":"A3"})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE a.active IS FALSE RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["a2","Person"])]
+    end
+
+    test "IS NOT FALSE predicate matches true and null states" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","active":0})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a3","Person"]), value: ~s({"name":"A3"})})
+
+      {:ok, rows} =
+        run(~G|MATCH (a:Person) WHERE a.active IS NOT FALSE RETURN a ORDER BY a.name ASC|)
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["a1","Person"]), ~s(["a3","Person"])]
+    end
+
+    test "IN predicate matches only listed values" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["cara","Person"]), value: ~s({"name":"Cara"})})
+
+      {:ok, rows} =
+        run(~G|MATCH (a:Person) WHERE a.name IN ["Alice", "Cara"] RETURN a ORDER BY a.name ASC|)
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"]), ~s(["cara","Person"])]
+    end
+
+    test "CONTAINS predicate matches substring" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, rows} = run(~G|MATCH (a:Person) WHERE a.name CONTAINS "lic" RETURN a|)
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"])]
+    end
+
+    test "STARTS WITH and ENDS WITH predicates match string boundaries" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["allen","Person"]), value: ~s({"name":"Allen"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, starts_rows} = run(~G|MATCH (a:Person) WHERE a.name STARTS WITH "Al" RETURN a ORDER BY a.name ASC|)
+      assert Enum.map(starts_rows, & &1["key"]) == [~s(["alice","Person"]), ~s(["allen","Person"])]
+
+      {:ok, ends_rows} = run(~G|MATCH (a:Person) WHERE a.name ENDS WITH "ce" RETURN a|)
+      assert Enum.map(ends_rows, & &1["key"]) == [~s(["alice","Person"])]
+    end
+
+    test "NOT predicate excludes matching rows" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","active":0})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE NOT a.active = 1 RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["bob","Person"])]
+    end
+
+    test "grouped predicate precedence is respected" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","age":30,"active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","age":18,"active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["cara","Person"]), value: ~s({"name":"Cara","age":30,"active":0})})
+
+      {:ok, rows} =
+        run(
+          ~G|MATCH (a:Person) WHERE (a.age >= 21 OR a.name = "Bob") AND a.active = 1 RETURN a ORDER BY a.name ASC|
+        )
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"]), ~s(["bob","Person"])]
+    end
+
+    test "XOR predicate matches rows where exactly one side is true" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","active":1,"staff":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","active":1,"staff":0})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a3","Person"]), value: ~s({"name":"A3","active":0,"staff":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a4","Person"]), value: ~s({"name":"A4","active":0,"staff":0})})
+
+      {:ok, rows} =
+        run(~G|MATCH (a:Person) WHERE a.active = 1 XOR a.staff = 1 RETURN a ORDER BY a.name ASC|)
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["a2","Person"]), ~s(["a3","Person"])]
+    end
+
+    test "nested grouped boolean expression evaluates correctly" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","age":30,"staff":1,"active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","age":30,"staff":0,"active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","age":10,"staff":1,"active":1})})
+
+      {:ok, rows} =
+        run(
+          ~G|MATCH (a:Person) WHERE ((a.age >= 21 OR a.name = "Bob") AND (NOT (a.staff = 1 XOR a.active = 1))) RETURN a ORDER BY a.name ASC|
+        )
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["a1","Person"]), ~s(["bob","Person"])]
+    end
+
+    test "double NOT behaves as identity" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","active":1})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","active":0})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE NOT NOT a.active = 1 RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["a1","Person"])]
+    end
+
+    test "BETWEEN predicate selects values in range" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a1","Person"]), value: ~s({"name":"A1","age":17})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a2","Person"]), value: ~s({"name":"A2","age":20})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["a3","Person"]), value: ~s({"name":"A3","age":31})})
+
+      {:ok, rows} = run(~G"MATCH (a:Person) WHERE a.age BETWEEN 18 AND 30 RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["a2","Person"])]
+    end
+
+    test "NOT IN predicate excludes listed values" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["cara","Person"]), value: ~s({"name":"Cara"})})
+
+      {:ok, rows} =
+        run(~G|MATCH (a:Person) WHERE a.name NOT IN ["Alice", "Bob"] RETURN a ORDER BY a.name ASC|)
+
+      assert Enum.map(rows, & &1["key"]) == [~s(["cara","Person"])]
+    end
   end
 
   # ── CREATE ──────────────────────────────────────────────────────────────────
@@ -398,6 +640,12 @@ defmodule OpenGQL.IntegrationTest do
   # ── Repo.all with ~G sigil (Ecto.Queryable) ───────────────────────────────────
 
   describe "Repo.all with MATCH statements (Ecto.Queryable)" do
+    test "Repo.all raises on non-SELECT statements" do
+      assert_raise ArgumentError, ~r/only implemented for SELECT/, fn ->
+        Repo.all(~G[CREATE (a:Person {name: "Alice"})])
+      end
+    end
+
     test "Repo.all accepts a SELECT Statement directly" do
       {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
 
@@ -494,6 +742,70 @@ defmodule OpenGQL.IntegrationTest do
       execute_pairs = execute_rows |> Enum.map(&{&1["n1_key"], &1["n2_key"]}) |> Enum.sort()
       repo_pairs = repo_rows |> Enum.map(&{&1["n1_key"], &1["n2_key"]}) |> Enum.sort()
       assert execute_pairs == repo_pairs
+    end
+
+    test "Repo.all supports left-directed path queries" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, _} =
+        Repo.insert(%Edge{source: ~s(["bob","Person"]), target: ~s(["alice","Person"]), rel: "KNOWS"})
+
+      [row] = Repo.all(~G"MATCH (a:Person)<-[:KNOWS]-(b:Person) RETURN a, b")
+      assert row["n1_key"] == ~s(["alice","Person"])
+      assert row["n2_key"] == ~s(["bob","Person"])
+    end
+
+    test "Repo.all supports undirected path queries" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, _} =
+        Repo.insert(%Edge{source: ~s(["alice","Person"]), target: ~s(["bob","Person"]), rel: "KNOWS"})
+
+      rows = Repo.all(~G"MATCH (a:Person)-[:KNOWS]-(b:Person) RETURN a, b")
+      assert length(rows) >= 1
+    end
+
+    test "Repo.all supports typeless edges in path queries" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      {:ok, _} =
+        Repo.insert(%Edge{source: ~s(["alice","Person"]), target: ~s(["bob","Person"]), rel: "FRIEND"})
+
+      rows = Repo.all(~G"MATCH (a:Person)-[]->(b:Person) RETURN a, b")
+      assert length(rows) == 1
+    end
+
+    test "Repo.all single-node null property filter matches null" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","ref":null})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      rows = Repo.all(~G"MATCH (a:Person {ref: null}) RETURN a")
+      assert Enum.map(rows, & &1["key"]) == [~s(["alice","Person"])]
+    end
+
+    test "Repo.all path query supports null filters on n1 and n2" do
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","ref":null})})
+
+      {:ok, _} =
+        Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","ref":null})})
+
+      {:ok, _} =
+        Repo.insert(%Edge{source: ~s(["alice","Person"]), target: ~s(["bob","Person"]), rel: "KNOWS"})
+
+      rows = Repo.all(~G"MATCH (a:Person {ref: null})-[:KNOWS]->(b:Person {ref: null}) RETURN a, b")
+      assert length(rows) == 1
+    end
+
+    test "Repo.all cross query supports null filters on both sides" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","ref":null})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob","ref":null})})
+
+      rows = Repo.all(~G"MATCH (a:Person {ref: null}), (b:Person {ref: null}) RETURN a, b")
+      assert length(rows) == 4
     end
 
     test "Repo.all with cross-join returns n1_key/n2_key row maps" do
@@ -640,6 +952,34 @@ defmodule OpenGQL.IntegrationTest do
           row = hd(results)
           assert row["n1_key"] == "[\"#{src_name}\",\"Person\"]"
           assert row["n2_key"] == "[\"#{tgt_name}\",\"Person\"]"
+        end)
+      end
+    end
+
+    property "ordered pagination via ORDER BY and LIMIT is stable" do
+      check all(
+              names <-
+                StreamData.list_of(valid_name_gen(), min_length: 3, max_length: 6)
+                |> StreamData.map(&Enum.uniq/1)
+                |> StreamData.filter(&(length(&1) >= 3)),
+              max_runs: 10
+            ) do
+        with_clean_db(fn ->
+          names
+          |> Enum.sort()
+          |> Enum.with_index(1)
+          |> Enum.each(fn {name, rank} ->
+            {:ok, _} =
+              Repo.insert(%Node{
+                key: ~s(["#{name}","Person"]),
+                value: ~s({"name":"#{name}","age":#{rank}})
+              })
+          end)
+
+          stmt = OpenGQL.parse_and_build("MATCH (a:Person) RETURN a ORDER BY a.age ASC LIMIT 2 SKIP 1")
+          {:ok, rows} = OpenGQL.execute(stmt, &Repo.query/2)
+
+          assert length(rows) == 2
         end)
       end
     end
