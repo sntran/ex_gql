@@ -1,6 +1,7 @@
 {
   "skip_files": [
-    "lib/opengql/parser.ex"
+    "src/opengql_lexer.erl",
+    "src/opengql_parser.erl"
   ],
   "coverage_options": {
     "treat_no_relevant_lines_as_covered": true,

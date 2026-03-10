@@ -9,7 +9,6 @@
   "excoveralls": {:git, "https://github.com/parroty/excoveralls.git", "7952661a92f2a8afbc71ad97e112f8755268bf73", [tag: "v0.18.3"]},
   "exqlite": {:hex, :exqlite, "0.35.0", "90741471945db42b66cd8ca3149af317f00c22c769cc6b06e8b0a08c5924aae5", [:make, :mix], [{:cc_precompiler, "~> 0.1", [hex: :cc_precompiler, repo: "hexpm", optional: false]}, {:db_connection, "~> 2.1", [hex: :db_connection, repo: "hexpm", optional: false]}, {:elixir_make, "~> 0.8", [hex: :elixir_make, repo: "hexpm", optional: false]}, {:table, "~> 0.1.0", [hex: :table, repo: "hexpm", optional: true]}], "hexpm", "a009e303767a28443e546ac8aab2539429f605e9acdc38bd43f3b13f1568bca9"},
   "jason": {:git, "https://github.com/michalmuskala/jason.git", "926d2ac6cc0271b9a7079b2ec16ae0cf802f7963", [tag: "v1.4.4"]},
-  "nimble_parsec": {:git, "https://github.com/dashbitco/nimble_parsec.git", "0b195519d6a501ed51d84da35183a010493b85c1", [tag: "v1.4.0"]},
   "stream_data": {:git, "https://github.com/whatyouhide/stream_data.git", "028e21fd2cd6935da9cc541c51848b8be45409ba", [tag: "v1.1.2"]},
   "telemetry": {:hex, :telemetry, "1.4.1", "ab6de178e2b29b58e8256b92b382ea3f590a47152ca3651ea857a6cae05ac423", [:rebar3], [], "hexpm", "2172e05a27531d3d31dd9782841065c50dd5c3c7699d95266b2edd54c2dafa1c"},
 }

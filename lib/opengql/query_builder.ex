@@ -244,7 +244,13 @@ defmodule OpenGQL.QueryBuilder do
   defp build_props([]), do: %{}
 
   defp build_props(pairs) do
-    pairs
+    normalized_pairs =
+      case pairs do
+        [:props | rest] -> rest
+        other -> other
+      end
+
+    normalized_pairs
     |> Enum.chunk_every(2)
     |> Enum.flat_map(fn
       [k, {_t, v}] when is_binary(k) -> [{k, v}]

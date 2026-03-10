@@ -183,6 +183,29 @@ defmodule OpenGQL.QueryBuilderTest do
       assert 21 in params
     end
 
+    test "comparison operators >, <, <=, and != are translated" do
+      %Statement{operations: [{gt_sql, gt_params}]} =
+        build("MATCH (a:Person) WHERE a.age > 21 RETURN a")
+
+      %Statement{operations: [{lt_sql, lt_params}]} =
+        build("MATCH (a:Person) WHERE a.age < 21 RETURN a")
+
+      %Statement{operations: [{lte_sql, lte_params}]} =
+        build("MATCH (a:Person) WHERE a.age <= 21 RETURN a")
+
+      %Statement{operations: [{neq_sql, neq_params}]} =
+        build(~S[MATCH (a:Person) WHERE a.name != "Bob" RETURN a])
+
+      assert gt_sql =~ "$.age') > ?"
+      assert Enum.take(gt_params, -1) == [21]
+      assert lt_sql =~ "$.age') < ?"
+      assert Enum.take(lt_params, -1) == [21]
+      assert lte_sql =~ "$.age') <= ?"
+      assert Enum.take(lte_params, -1) == [21]
+      assert neq_sql =~ "$.name') != ?"
+      assert Enum.take(neq_params, -1) == ["Bob"]
+    end
+
     test "FILTER behaves like WHERE" do
       %Statement{operations: [{sql, params}]} =
         build(~S[MATCH (a:Person) FILTER a.name = "Alice" RETURN a])
@@ -200,6 +223,15 @@ defmodule OpenGQL.QueryBuilderTest do
       assert sql =~ "DESC"
       assert sql =~ "$.name"
       assert sql =~ "ASC"
+    end
+
+    test "ORDER BY defaults to ASC when no direction is provided" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) RETURN a ORDER BY a.name")
+
+      assert sql =~ "ORDER BY"
+      assert sql =~ "$.name') ASC"
+      assert params == ["Person"]
     end
 
     test "LIMIT appends parameterized limit" do
@@ -257,6 +289,22 @@ defmodule OpenGQL.QueryBuilderTest do
         build("MATCH (a:Person) WHERE a.ref IS NOT NULL RETURN a")
 
       assert sql =~ "IS NOT NULL"
+      refute nil in params
+    end
+
+    test "comparison against null with = renders IS NULL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.ref = null RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.ref') IS NULL"
+      refute nil in params
+    end
+
+    test "comparison against null with != renders IS NOT NULL" do
+      %Statement{operations: [{sql, params}]} =
+        build("MATCH (a:Person) WHERE a.ref != null RETURN a")
+
+      assert sql =~ "json_extract(n.value, '$.ref') IS NOT NULL"
       refute nil in params
     end
 
@@ -435,6 +483,15 @@ defmodule OpenGQL.QueryBuilderTest do
       assert params == ["Person"]
     end
 
+    test "anonymous labeled node still builds a valid select without alias references" do
+      %Statement{operations: [{sql, params}], ast_info: %{kind: :single_node, labels: ["Person"]}} =
+        OpenGQL.parse_and_build("MATCH (:Person) RETURN *")
+
+      assert sql =~ "FROM nodes AS n"
+      assert sql =~ "'$[1]'"
+      assert params == ["Person"]
+    end
+
     test "WHERE and FILTER predicates are merged with AND" do
       %Statement{operations: [{sql, params}]} =
         build("MATCH (a:Person) WHERE a.age >= 18 FILTER a.active = 1 RETURN a")
@@ -480,6 +537,22 @@ defmodule OpenGQL.QueryBuilderTest do
         ]
 
       assert_raise ArgumentError, ~r/invalid predicate token sequence/, fn ->
+        QueryBuilder.build(ast)
+      end
+    end
+
+    test "unsupported comparison operator raises ArgumentError" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"]]}]}]},
+             {:where, [{:condition_cmp, [{:property, ["a", "age"]}, :wat, {:integer, 1}]}]},
+             {:return, ["a"]}
+           ]}
+        ]
+
+      assert_raise ArgumentError, ~r/unsupported comparison operator/, fn ->
         QueryBuilder.build(ast)
       end
     end
@@ -817,6 +890,114 @@ defmodule OpenGQL.QueryBuilderTest do
       assert length(ops) == 1
       {sql, _params} = hd(ops)
       assert sql =~ "INSERT INTO nodes"
+    end
+
+    test "malformed SET entries are ignored and fall back to select all" do
+      ast = [{:statement, [{:set, [{:oops, []}]}, {:return, ["*"]}]}]
+
+      stmt = QueryBuilder.build(ast)
+
+      assert %Statement{type: :select, ast_info: %{kind: :all}, operations: [{sql, []}]} = stmt
+      assert sql == "SELECT key, value FROM nodes"
+    end
+
+    test "malformed ORDER BY items are ignored" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"]]}]}]},
+             {:return, ["a"]},
+             {:order_by, [{:bad_item, []}]}
+           ]}
+        ]
+
+      %Statement{operations: [{sql, params}]} = QueryBuilder.build(ast)
+
+      refute sql =~ "ORDER BY"
+      assert params == ["Person"]
+    end
+
+    test "unknown predicate items are ignored" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"]]}]}]},
+             {:where, [{:mystery_predicate, []}]},
+             {:return, ["a"]}
+           ]}
+        ]
+
+      %Statement{operations: [{sql, params}]} = QueryBuilder.build(ast)
+
+      refute sql =~ "mystery"
+      assert params == ["Person"]
+    end
+
+    test "non-prefixed property lists are accepted in fallback ASTs" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"], props: ["name", {:string, "Alice"}]]}]}]},
+             {:return, ["a"]}
+           ]}
+        ]
+
+      %Statement{ast_info: %{props: props}, operations: [{_sql, params}]} = QueryBuilder.build(ast)
+
+      assert props == %{"name" => "Alice"}
+      assert "Alice" in params
+    end
+
+    test "malformed property lists are ignored instead of crashing" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"], props: ["dangling"]]}]}]},
+             {:return, ["a"]}
+           ]}
+        ]
+
+      %Statement{ast_info: %{props: props}, operations: [{sql, params}]} = QueryBuilder.build(ast)
+
+      assert props == %{}
+      assert sql =~ "FROM nodes AS n"
+      assert params == ["Person"]
+    end
+
+    test "malformed integer clauses are ignored" do
+      ast =
+        [
+          {:statement,
+           [
+             {:match, [{:path, [{:node, [var: ["a"], labels: ["Person"]]}]}]},
+             {:return, ["a"]},
+             {:limit, ["bad"]},
+             {:offset, [:bad]},
+             {:skip, ["oops"]}
+           ]}
+        ]
+
+      %Statement{operations: [{sql, params}]} = QueryBuilder.build(ast)
+
+      refute sql =~ "LIMIT ?"
+      refute sql =~ "OFFSET ?"
+      assert params == ["Person"]
+    end
+
+    test "delete and detach-delete without MATCH conditions omit WHERE clauses" do
+      delete_ast = [{:statement, [{:delete, [{:vars, ["a"]}]}]}]
+      detach_ast = [{:statement, [{:detach_delete, [{:vars, ["a"]}]}]}]
+
+      %Statement{operations: [{delete_sql, []}]} = QueryBuilder.build(delete_ast)
+      %Statement{operations: [{edge_sql, []}, {node_sql, []}]} = QueryBuilder.build(detach_ast)
+
+      assert delete_sql == "DELETE FROM nodes AS n"
+      assert edge_sql == "DELETE FROM edges WHERE source IN (SELECT key FROM nodes AS n) OR target IN (SELECT key FROM nodes AS n)"
+      assert node_sql == "DELETE FROM nodes AS n"
     end
   end
 end

@@ -82,6 +82,13 @@ defmodule OpenGQLTest do
         ~G"INVALID QUERY"
       end
     end
+
+    test "raises unexpected input for lexer illegal-token errors" do
+      assert_raise ArgumentError, ~r/unexpected input near "MATCH @ RETURN a"/, fn ->
+        OpenGQL.parse_and_build("MATCH @ RETURN a")
+      end
+    end
+
   end
 
   describe "~G sigil — CREATE" do
@@ -205,6 +212,54 @@ defmodule OpenGQLTest do
         assert sql =~ "INNER JOIN"
         assert rel_type in params
       end
+    end
+  end
+end
+
+defmodule OpenGQL.ParseAndBuildTest do
+  use ExUnit.Case, async: false
+
+  test "uses parser rest for illegal-token errors when rest is present" do
+    OpenGQL.ParserStubHelper.with_stubbed_parser(
+      {:error, "{:illegal, ~c\"@\"}", "@@tail", %{}, 1, 0},
+      fn parser_module ->
+        assert_raise ArgumentError, ~r/unexpected input near "@@tail"/, fn ->
+          OpenGQL.parse_and_build("MATCH something", parser_module)
+        end
+      end
+    )
+  end
+
+  test "raises on partial parse when parser returns remaining input" do
+    OpenGQL.ParserStubHelper.with_stubbed_parser(
+      {:ok, [{:statement, []}], "tail", %{}, 1, 4},
+      fn parser_module ->
+        assert_raise ArgumentError, ~r/unexpected input near "tail"/, fn ->
+          OpenGQL.parse_and_build("MATCH something", parser_module)
+        end
+      end
+    )
+  end
+end
+
+defmodule OpenGQL.ParserStubHelper do
+  def with_stubbed_parser(parse_result, fun) do
+    module_name = Module.concat(OpenGQL.TestSupport, "ParserStub#{System.unique_integer([:positive])}")
+
+    [{^module_name, _binary}] =
+      Code.compile_quoted(
+        quote do
+          defmodule unquote(module_name) do
+            def parse(_input), do: unquote(Macro.escape(parse_result))
+          end
+        end
+      )
+
+    try do
+      fun.(module_name)
+    after
+      :code.purge(module_name)
+      :code.delete(module_name)
     end
   end
 end

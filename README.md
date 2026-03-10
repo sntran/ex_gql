@@ -38,9 +38,9 @@ def deps do
 end
 ```
 
-> **Note** — OpenGQL has only one runtime dependency: `nimble_parsec`.  Ecto
-> and all SQLite adapters are optional; they are only used in the tests bundled
-> with this library.
+> **Note** — OpenGQL itself has no required runtime dependency beyond the Erlang
+> / Elixir standard tooling used to build it. Ecto and SQLite adapters are
+> optional; they are only used in the tests bundled with this library.
 
 ## Usage
 

@@ -6,6 +6,7 @@ defmodule OpenGQL.MixProject do
       app: :opengql,
       version: "0.1.0",
       elixir: "~> 1.14",
+      compilers: [:yecc, :leex] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       test_coverage: [tool: ExCoveralls],
@@ -35,7 +36,6 @@ defmodule OpenGQL.MixProject do
 
   defp deps do
     [
-      {:nimble_parsec, git: "https://github.com/dashbitco/nimble_parsec.git", tag: "v1.4.0"},
       # Ecto and SQLite driver — dev/test only; not required at runtime
       {:ecto, git: "https://github.com/elixir-ecto/ecto.git", tag: "v3.12.5",
        only: [:dev, :test], override: true},

@@ -98,6 +98,8 @@ defmodule OpenGQL do
   alias OpenGQL.QueryBuilder
   alias OpenGQL.Statement
 
+  @parser_module Parser
+
   @doc ~S"""
   `~GQL` sigil — compiles a GQL string into an `%OpenGQL.Statement{}`.
 
@@ -136,17 +138,28 @@ defmodule OpenGQL do
   Raises `ArgumentError` if the GQL string is invalid.
   """
   def parse_and_build(gql_string) when is_binary(gql_string) do
+    parse_and_build(gql_string, @parser_module)
+  end
+
+  @doc false
+  def parse_and_build(gql_string, parser_module)
+      when is_binary(gql_string) and is_atom(parser_module) do
     gql_string = String.trim(gql_string)
 
-    case Parser.parse(gql_string) do
+    case parser_module.parse(gql_string) do
       {:ok, ast, "", _ctx, _line, _offset} ->
         QueryBuilder.build(ast)
 
       {:ok, _ast, rest, _ctx, _line, _offset} ->
         raise ArgumentError, "GQL parse error: unexpected input near #{inspect(rest)}"
 
-      {:error, reason, _rest, _ctx, _line, _offset} ->
-        raise ArgumentError, "GQL parse error: #{inspect(reason)}"
+      {:error, reason, rest, _ctx, _line, _offset} ->
+        if String.contains?(to_string(reason), "{:illegal,") do
+          unexpected = if rest == "", do: gql_string, else: rest
+          raise ArgumentError, "GQL parse error: unexpected input near #{inspect(unexpected)}"
+        else
+          raise ArgumentError, "GQL parse error: #{inspect(reason)}"
+        end
     end
   end
 

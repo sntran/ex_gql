@@ -4,6 +4,18 @@ defmodule OpenGQL.QueryableBranchTest do
   alias OpenGQL.Statement
 
   describe "Ecto.Queryable branch coverage" do
+    test "all-nodes query returns every node for kind :all" do
+      {:ok, _} = Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice"})})
+      {:ok, _} = Repo.insert(%Node{key: ~s(["bob","Person"]), value: ~s({"name":"Bob"})})
+
+      stmt = %Statement{type: :select, operations: [{"", []}], ast_info: %{kind: :all}}
+
+      rows = Repo.all(stmt)
+
+      assert Enum.map(rows, & &1["key"]) |> Enum.sort() ==
+               [~s(["alice","Person"]), ~s(["bob","Person"])]
+    end
+
     test "single_node query handles nil and non-nil property predicates" do
       {:ok, _} =
         Repo.insert(%Node{key: ~s(["alice","Person"]), value: ~s({"name":"Alice","ref":null})})

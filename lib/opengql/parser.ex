@@ -1,157 +1,46 @@
 defmodule OpenGQL.Parser do
   @moduledoc """
-  NimbleParsec-based parser for the GQL pattern subset.
+  Parser entrypoint for the supported OpenGQL subset.
+
+  The implementation uses the Erlang `:leex` + `:yecc` backend and preserves
+  the historical return tuple shape:
+
+      {:ok, [{:statement, clauses}], "", %{}, line, offset}
+      {:error, reason, rest, %{}, line, offset}
   """
 
-  import NimbleParsec
+  @type parse_result ::
+          {:ok, [{:statement, keyword()}], binary(), map(), pos_integer(), non_neg_integer()}
+          | {:error, binary(), binary(), map(), pos_integer(), non_neg_integer()}
 
-  # ── Whitespace ─────────────────────────────────────────────────────────────────
+  @spec parse(binary()) :: parse_result
+  def parse(input) when is_binary(input) do
+    trimmed = String.trim(input)
+    chars = String.to_charlist(trimmed)
 
-  whitespace =
-    ascii_string([?\s, ?\n, ?\r, ?\t], min: 1)
-    |> label("whitespace")
+    with {:ok, tokens, _end_line} <- :opengql_lexer.string(chars),
+         {:ok, clauses} <- :opengql_parser.parse(tokens) do
+      {:ok, [{:statement, clauses}], "", %{}, 1, String.length(trimmed)}
+    else
+      {:error, {line, _module, reason}, remaining} ->
+        {:error, normalize_reason(reason), normalize_rest(remaining), %{}, line, 0}
 
-  optional_ws =
-    ascii_string([?\s, ?\n, ?\r, ?\t], min: 0)
-    |> ignore()
+      {:error, {line, _module, reason}} ->
+        {:error, normalize_reason(reason), "", %{}, line, 0}
 
-  # ── Literals ───────────────────────────────────────────────────────────────────
+      {:error, {line, _module, reason, _token}} ->
+        {:error, normalize_reason(reason), "", %{}, line, 0}
 
-  identifier =
-    ascii_char([?a..?z, ?A..?Z, ?_])
-    |> repeat(ascii_char([?a..?z, ?A..?Z, ?0..?9, ?_]))
-    |> reduce({List, :to_string, []})
-    |> label("identifier")
-
-  integer_value =
-    optional(ascii_char([?-, ?+]))
-    |> ascii_string([?0..?9], min: 1)
-    |> reduce({:reduce_integer, []})
-  match_clause = parsec({OpenGQL.Parser.Graph, :match_clause})
-  create_clause = parsec({OpenGQL.Parser.Graph, :create_clause})
-  set_clause = parsec({OpenGQL.Parser.Graph, :set_clause})
-  delete_clause = parsec({OpenGQL.Parser.Graph, :delete_clause})
-
-  # ── RETURN Clause ──────────────────────────────────────────────────────────────
-
-  return_item = choice([string("*"), identifier])
-
-  return_clause =
-    ignore(string("RETURN"))
-    |> ignore(whitespace)
-    |> concat(optional_ws)
-    |> concat(return_item)
-    |> repeat(
-      ignore(concat(optional_ws, string(",")))
-      |> concat(optional_ws)
-      |> concat(return_item)
-    )
-    |> tag(:return)
-
-  # ── WHERE/FILTER Clauses ─────────────────────────────────────────────────────
-
-  where_clause = parsec({OpenGQL.Parser.Predicate, :where_clause})
-  filter_clause = parsec({OpenGQL.Parser.Predicate, :filter_clause})
-
-  property_ref =
-    identifier
-    |> ignore(string("."))
-    |> concat(identifier)
-    |> tag(:property)
-
-  # ── ORDER BY / LIMIT / OFFSET / SKIP / FINISH ───────────────────────────────
-
-  order_direction =
-    choice([
-      string("ASC") |> replace(:asc),
-      string("DESC") |> replace(:desc)
-    ])
-
-  order_item =
-    concat(optional_ws, property_ref)
-    |> optional(
-      ignore(whitespace)
-      |> concat(order_direction)
-    )
-    |> tag(:order_item)
-
-  order_by_clause =
-    ignore(string("ORDER"))
-    |> ignore(whitespace)
-    |> ignore(string("BY"))
-    |> ignore(whitespace)
-    |> concat(optional_ws)
-    |> concat(order_item)
-    |> repeat(
-      ignore(concat(optional_ws, string(",")))
-      |> concat(optional_ws)
-      |> concat(order_item)
-    )
-    |> tag(:order_by)
-
-  limit_clause =
-    ignore(string("LIMIT"))
-    |> ignore(whitespace)
-    |> concat(optional_ws)
-    |> concat(integer_value)
-    |> tag(:limit)
-
-  offset_clause =
-    ignore(string("OFFSET"))
-    |> ignore(whitespace)
-    |> concat(optional_ws)
-    |> concat(integer_value)
-    |> tag(:offset)
-
-  skip_clause =
-    ignore(string("SKIP"))
-    |> ignore(whitespace)
-    |> concat(optional_ws)
-    |> concat(integer_value)
-    |> tag(:skip)
-
-  finish_clause =
-    ignore(string("FINISH"))
-    |> replace(true)
-    |> tag(:finish)
-
-  # ── Full Statement ─────────────────────────────────────────────────────────────
-
-  clause =
-    choice([
-      match_clause,
-      create_clause,
-      set_clause,
-      delete_clause,
-      return_clause,
-      where_clause,
-      filter_clause,
-      order_by_clause,
-      limit_clause,
-      offset_clause,
-      skip_clause,
-      finish_clause
-    ])
-
-  statement =
-    optional_ws
-    |> concat(clause)
-    |> repeat(
-      ignore(whitespace)
-      |> concat(optional_ws)
-      |> concat(clause)
-    )
-    |> optional(ignore(concat(optional_ws, string(";"))))
-    |> concat(optional_ws)
-    |> tag(:statement)
-
-  defparsec(:parse, statement)
-
-  defp reduce_integer([sign, digits]) when is_integer(sign) do
-    String.to_integer(<<sign>> <> digits)
+      other ->
+        {:error, inspect(other), "", %{}, 1, 0}
+    end
   end
 
-  defp reduce_integer([digits]) when is_binary(digits) do
-    String.to_integer(digits)
-  end
+  defp normalize_reason(reason) when is_binary(reason), do: reason
+  defp normalize_reason(reason) when is_list(reason), do: IO.iodata_to_binary(reason)
+  defp normalize_reason(reason), do: inspect(reason)
+
+  defp normalize_rest(rest) when is_binary(rest), do: rest
+  defp normalize_rest(rest) when is_list(rest), do: IO.iodata_to_binary(rest)
+  defp normalize_rest(_rest), do: ""
 end
