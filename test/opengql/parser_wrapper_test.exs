@@ -48,6 +48,36 @@ defmodule OpenGQL.ParserWrapperTest do
     )
   end
 
+  test "normalizes list reasons into binaries" do
+    with_stubbed_modules(
+      %{
+        opengql_lexer: """
+        -module(opengql_lexer).
+        -export([string/1]).
+        string(_Chars) -> {error, {6, opengql_lexer, ["list", " reason"]}, <<"tail">>}.
+        """
+      },
+      fn ->
+        assert {:error, "list reason", "tail", %{}, 6, 0} = Parser.parse("ignored")
+      end
+    )
+  end
+
+  test "normalizes non-string reasons via inspect" do
+    with_stubbed_modules(
+      %{
+        opengql_lexer: """
+        -module(opengql_lexer).
+        -export([string/1]).
+        string(_Chars) -> {error, {8, opengql_lexer, atom_reason}, <<"tail">>}.
+        """
+      },
+      fn ->
+        assert {:error, ":atom_reason", "tail", %{}, 8, 0} = Parser.parse("ignored")
+      end
+    )
+  end
+
   test "normalizes binary rest values and unexpected return shapes" do
     with_stubbed_modules(
       %{

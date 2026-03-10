@@ -36,6 +36,12 @@ defmodule OpenGQL.Parser do
     end
   end
 
+  # Keep illegal-token formatting stable across Elixir versions, which differ
+  # in how charlists are rendered by inspect/1.
+  defp normalize_reason({:illegal, chars}) when is_list(chars) do
+    "{:illegal, ~c" <> inspect(List.to_string(chars)) <> "}"
+  end
+
   defp normalize_reason(reason) when is_binary(reason), do: reason
   defp normalize_reason(reason) when is_list(reason), do: IO.iodata_to_binary(reason)
   defp normalize_reason(reason), do: inspect(reason)
